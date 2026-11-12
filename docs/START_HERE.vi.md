@@ -1,6 +1,6 @@
 # WinOwner MCP — cài đặt và kết nối ChatGPT từ A đến Z
 
-**Mục tiêu:** người mới tải ZIP, giải nén, nhấp đúp **Install-WinOwner.cmd** để cài MCP cục bộ. Sau đó, nếu tài khoản được cấp quyền, ghép ChatGPT qua tunnel + OAuth. **Hai việc này khác nhau:** cài local thành công không có nghĩa ChatGPT đã kết nối.
+**Mục tiêu:** tải ZIP, giải nén và nhấp đúp Install-WinOwner.cmd. Không nhập token nội bộ. Lần đầu nối ChatGPT vẫn cần quyền tunnel, OAuth chính chủ.
 
 ## A. Chuẩn bị
 
@@ -16,9 +16,9 @@
 3. Vào Downloads, nhấp phải ZIP → **Extract All / Giải nén tất cả**. **Không chạy .cmd ngay bên trong ZIP.**
 4. Mở thư mục đã giải nén, nhấp đúp **Install-WinOwner.cmd**.
 5. Đọc cửa sổ cài đặt; nếu Python mới được cài và được yêu cầu mở lại phiên terminal, nhấp đúp .cmd lần nữa. Các gói chạy trong môi trường Python riêng .venv.
-6. Khi thấy **LOCAL_INSTALL_PASS**, MCP cục bộ đã chạy ở địa chỉ 127.0.0.1:8768; Notepad sẽ mở hướng dẫn này.
+6. Khi thấy **LOCAL_INSTALL_PASS**, MCP đã chạy ở 127.0.0.1:8768. Sau khi cửa sổ đóng, mở file **WinOwner-SETUP-RESULT.txt** cùng thư mục để kiểm tra kết quả. Không có Notepad tự bật.
 
-Cài mặc định chỉ cấp **read_only**. Không bật ghi file, thực thi lệnh từ xa, chuột/bàn phím, không cấp OWNER_GLOBAL_FILESYSTEM, không tự kết nối ChatGPT. Không nhấp bỏ qua cảnh báo SmartScreen một cách mù quáng: hãy kiểm tra đúng GitHub của dự án và script trước khi chạy.
+**Mặc định Owner Full Control:** bộ cài chọn profile owner_full_control. Quyền file, thực thi, desktop chỉ dành cho chủ máy đã xác thực OAuth cùng delegation hợp lệ; chưa xác thực vẫn bị chặn. Token nội bộ tự sinh, không phải nhập tay.
 
 ## C. Kiểm tra MCP cục bộ
 
@@ -32,6 +32,13 @@ Get-ScheduledTask -TaskName WinOwnerMCP-8768
 Cần thấy **status: ok**, **require_autonomous_auth: true**, **allow_loopback_tunnel_identity: false** và task do bộ cài tạo. Báo cáo **runtime/logs/bootstrap-report.json** có LOCAL_INSTALL_PASS.
 
 Yêu cầu MCP không mang xác thực phải bị từ chối với HTTP **401**. Một cổng đang lắng nghe chưa phải bằng chứng ChatGPT kết nối. Nếu 8768 đã có dịch vụ khác, bộ cài sẽ từ chối thay vì tắt dịch vụ lạ. Người dùng nâng cao có thể chọn cổng khác: chạy file .cmd từ Command Prompt kèm **-Port 18768**, sau đó sử dụng cổng đã chọn trong cấu hình tunnel.
+
+## Các cửa sổ và token có thể xuất hiện
+
+- **Cài local:** chỉ có cửa sổ cài đặt chính, không tự mở Notepad, không đòi nhập token nội bộ. Token được tạo tự động và bảo vệ bằng ACL.
+- **Kết nối ChatGPT lần đầu:** runtime key, OAuth consent và quyền tunnel thuộc tài khoản OpenAI. Không thể bỏ qua bước đăng nhập hoặc tự chấp thuận thao tác nhạy cảm.
+- **Thiếu Python:** Windows/winget có thể yêu cầu xác nhận cài phần mềm; việc này do Windows quản lý.
+- **Đã ghép nối hợp lệ:** không nhập lại token mỗi lần cài local; tuyệt đối không chia sẻ secret lên chat hoặc GitHub.
 
 ## D. Những quyền cần có để thêm ChatGPT
 
@@ -146,6 +153,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Bootstrap-Wind
 
 Lệnh Remove chỉ dừng listener được xác minh, gỡ task do WinOwner tạo và **giữ nguyên credential** cho chủ máy xử lý. Gỡ kết nối ChatGPT: xóa plugin hoặc revoke token, tunnel, runtime key trong tài khoản của chính bạn. Để cập nhật phiên bản, sao lưu riêng config và runtime/secrets trước, xem CHANGELOG; không sao chép secret từ người khác.
 
-## K. Giới hạn bản thử nghiệm
+## K. Trạng thái phát triển v1.1.0
 
-Bộ launcher ở nhánh phát triển mới, **RC3 ZIP cũ không tự cập nhật**. Cài local one-click có thể được thử tự động, nhưng không thể hứa kết nối ChatGPT one-click khi người dùng chưa có tunnel, quyền và OAuth. Muốn gọi release **production stable**, phải qua máy Windows mới, cài/khởi động lại, E2E từ ChatGPT, security, rollback và audit đầy đủ.
+v1.1.0 đang kiểm thử, chưa phát hành stable. Cần nghiệm thu Windows sạch, khởi động lại, OAuth ChatGPT thật và rollback trước khi phát hành.

@@ -30,7 +30,7 @@ def get_release_identity() -> dict[str, Any]:
             except Exception:
                 pass
 
-    rel_version = str(manifest_data.get("version") or "v1.0.0-rc3")
+    rel_version = str(manifest_data.get("version") or "v1.1.0")
     source_commit = str(manifest_data.get("source_commit") or "")
     build_id = str(manifest_data.get("build_id") or "")
     zip_sha256 = str(manifest_data.get("zip_sha256") or "")

@@ -1,4 +1,4 @@
-"""WinOwner MCP scheduled-task entrypoint (local owner, read-only).
+"""WinOwner MCP scheduled-task entrypoint (current Windows owner).
 
 No bearer secrets in Scheduled Task arguments, Git history, or command line.
 This process directly hosts uvicorn, allowing Task Scheduler to stop it.
@@ -16,9 +16,11 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def start(port: int) -> None:
+def start(port: int, profile: str = "read_only") -> None:
     if os.name != "nt":
         raise SystemExit("WinOwner task launcher requires Windows")
+    if profile not in {"read_only", "owner_full_control"}:
+        raise SystemExit("Unknown security profile")
     policy = ROOT / "config" / "policy.json"
     bearer = ROOT / "runtime" / "secrets" / "gateway_caller.token"
     db_path = ROOT / "runtime" / "secrets" / "oauth.db"
@@ -35,7 +37,7 @@ def start(port: int) -> None:
     os.environ["WINDOWS_MCP_GATEWAY_TOKEN"] = secret
     os.environ["MCP_STATE_ROOT"] = str(ROOT)
     os.environ["WINDOWS_MCP_BACKEND_ENV_FILE"] = str(ROOT / "runtime" / "not-configured.env")
-    os.environ["MCP_AGENT_PROFILE"] = "read_only"
+    os.environ["MCP_AGENT_PROFILE"] = profile
 
     log_dir = ROOT / "runtime" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -54,7 +56,7 @@ def start(port: int) -> None:
             str(adapter),
             "--host", "127.0.0.1",
             "--port", str(port),
-            "--profile", "read_only",
+            "--profile", profile,
             "--policy-path", str(policy),
             "--db-path", str(db_path),
         ]
@@ -62,9 +64,10 @@ def start(port: int) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="WinOwner MCP local read-only task")
+    parser = argparse.ArgumentParser(description="WinOwner MCP local authenticated owner task")
     parser.add_argument("--port", type=int, default=8768)
+    parser.add_argument("--profile", choices=("read_only", "owner_full_control"), default="read_only")
     args = parser.parse_args()
     if not 1024 <= args.port <= 65535:
         parser.error("port must be between 1024 and 65535")
-    start(args.port)
+    start(args.port, args.profile)

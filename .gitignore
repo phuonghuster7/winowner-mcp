@@ -56,3 +56,6 @@ Thumbs.db
 *.swp
 *.bak*
 
+
+# Generated local setup status, never distribute or commit
+WinOwner-SETUP-RESULT.txt

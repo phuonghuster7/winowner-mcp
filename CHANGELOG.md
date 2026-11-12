@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased — one-click beginner onboarding (RC4 preview)
+## Unreleased — v1.1.0 ChatGPT owner-first onboarding
 
-- Added a double-click **Install-WinOwner.cmd** launcher and **scripts/Setup-WinOwner.ps1**, delegating to the safe local read-only bootstrap. A ZIP extraction now works without first installing Git.
+- Added a double-click **Install-WinOwner.cmd** launcher and **scripts/Setup-WinOwner.ps1**, selecting authenticated owner_full_control while preserving OAuth and owner delegation. A ZIP extraction now works without first installing Git.
 - Added Vietnamese [A–Z setup guide](docs/START_HERE.vi.md) documenting Platform tunnel roles, runtime key vs admin key, supported tunnel-client, OAuth and an actual ChatGPT tool call.
 - Updated both READMEs, install/pairing docs, release inventory, source guard and Windows CI checks.
 - Fixed Repair -DryRun on a fresh checkout to validate the example policy without writing a live policy or report; rollback without a valid baseline remains fail-closed.

@@ -18,7 +18,7 @@ param(
     [string]$ProjectRoot = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }),
     [string]$OutputDir = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "dist" } else { Join-Path (Get-Location).Path "dist" }),
     [string]$AttestationPath = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "runtime\evidence\test_run_attestation.json" } else { Join-Path (Get-Location).Path "runtime\evidence\test_run_attestation.json" }),
-    [string]$Version = "v1.0.0-rc4-preview",
+    [string]$Version = "v1.1.0",
     [switch]$RequireAttestation,
     [switch]$DryRun
 )

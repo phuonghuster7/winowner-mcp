@@ -23,13 +23,24 @@ def test_beginner_entrypoint_and_release_inventory() -> None:
     batch = launcher.read_text(encoding="utf-8")
     assert "Setup-WinOwner.ps1" in batch
     assert "-ExecutionPolicy Bypass" in batch  # process-scoped, no registry modification
-    assert "pause" in batch.lower()  # reports errors in Explorer double-click mode
+    assert "\npause" not in batch.lower()  # no additional keypress required
     ps = setup.read_text(encoding="utf-8")
     assert "Bootstrap-WindowsMcp.ps1" in ps
     assert "allow_loopback_tunnel_identity" in ps
     assert "remote_oauth_paired" in ps
     assert "owner_global_filesystem_enabled" in ps
+    assert "-OwnerFullControl" in ps
+    assert "WinOwner-SETUP-RESULT.txt" in ps
+    assert "Start-Process -FilePath \"notepad.exe\"" not in ps
+    assert "Read-Host" not in ps
+    assert "Get-Credential" not in ps
+    for name in ("README.md", "README.vi.md"):
+        introduction = (ROOT / name).read_text(encoding="utf-8")
+        assert "v1.1.0" in introduction
+        assert "ChatGPT" in introduction
+        assert not any(name in introduction for name in ("Claude", "Cursor", "Gemini"))
     assert "LOCAL_INSTALL_PASS" in ps
+    assert (ROOT / "scripts" / "Test-WinOwnerOneClick.ps1").is_file()
     assert "Install-WinOwner.cmd" in builder.read_text(encoding="utf-8")
     docs = guide.read_text(encoding="utf-8")
     assert "tunnel_id" in docs
@@ -93,3 +104,4 @@ def test_beginner_frontend_dry_run_does_not_install() -> None:
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert "DRY_RUN_PASS" in result.stdout
     assert "LOCAL_INSTALL_PASS" not in result.stdout
+    assert "profile=owner_full_control" in result.stdout

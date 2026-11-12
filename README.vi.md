@@ -1,69 +1,44 @@
-# WinOwner MCP
+# WinOwner MCP — v1.1.0
 
-**Máy Windows của bạn. AI của bạn. Quyền kiểm soát của bạn.**
+**Dùng ChatGPT điều khiển máy Windows của chính bạn.** WinOwner MCP kết nối ChatGPT đến máy riêng qua MCP và tunnel có xác thực.
 
-WinOwner MCP là agent cho phép AI được chủ máy xác thực thực hiện công việc lập trình và điều khiển Windows từ xa thông qua giao thức MCP.
+[English](README.md) · [Hướng dẫn A–Z cho người mới](docs/START_HERE.vi.md) · [Kết nối ChatGPT](docs/CONNECT_CHATGPT.md) · [Bảo mật](SECURITY.md)
 
-[English](README.md) · [Hướng dẫn cài đặt](docs/INSTALLATION.md) · [Kết nối ChatGPT](docs/CONNECT_CHATGPT.md) · [Bảo mật](SECURITY.md)
+> **v1.1.0 đang kiểm thử, chưa phải bản stable đã phát hành.** AI có thể chỉnh sửa file và điều khiển desktop bằng quyền của tài khoản Windows chạy agent. Chỉ cài trên máy mà bạn có quyền quản lý.
 
-> **Bản RC thử nghiệm, có quyền tác động tới máy tính.** Agent thực thi trong phạm vi quyền của tài khoản Windows chạy nó; đây không phải sandbox và chưa được kiểm toán bảo mật độc lập.
+## Cài bằng một lần nhấp đúp
 
-## Cài cho người mới — nhấp đúp, không cần Git
+1. Vào trang GitHub này, chọn **Code → Download ZIP**.
+2. Nhấp phải file ZIP → **Extract All / Giải nén tất cả**.
+3. Mở thư mục đã giải nén, nhấp đúp **Install-WinOwner.cmd**.
 
-1. Vào GitHub → **Code → Download ZIP**, sau đó **Extract All** (giải nén).
-2. Trong thư mục vừa giải nén, nhấp đúp **Install-WinOwner.cmd**.
-3. Chờ **LOCAL_INSTALL_PASS**. Đọc [Hướng dẫn đầy đủ A–Z](docs/START_HERE.vi.md) được mở bằng Notepad.
+Bộ cài tự tạo môi trường Python riêng, cài phụ thuộc, tạo Scheduled Task để MCP khởi động lúc đăng nhập. Nếu thiếu Python 3.12, công cụ thử cài qua winget.
 
-Cần Windows 10/11; nếu chưa có Python 3.12, bộ cài thử sử dụng winget. **Bước này chỉ cài MCP cục bộ ở chế độ read_only.** Để kết nối ChatGPT còn cần quyền custom MCP, tunnel_id, runtime API key và OAuth. Bản RC3 ZIP trước đây chưa chứa launcher mới.
+**Không hỏi nhập token nội bộ trong bước cài local:** khóa nội bộ được tạo và lưu tự động. Chỉ có cửa sổ cài đặt chính; không tự mở Notepad, không bắt bấm phím để kết thúc. Thành công sẽ hiện **LOCAL_INSTALL_PASS**. Sau khi cửa sổ đóng, mở **WinOwner-SETUP-RESULT.txt** ngay trong thư mục cài để xem kết quả; không cần mở PowerShell.
+
+**Mặc định: Owner Full Control.** Chế độ này chỉ cho phép chủ máy **đã xác thực OAuth và có delegation hợp lệ** sử dụng công cụ đọc/ghi file, Git, chạy lệnh và điều khiển desktop. Không tự cấp quyền Administrator, không cho người chưa xác thực hoặc người khác dùng quyền của chủ máy.
+
+## Kết nối ChatGPT lần đầu
+
+Cài Windows xong **chưa phải** kết nối ChatGPT. Mở [hướng dẫn A–Z](docs/START_HERE.vi.md):
+
+1. Tạo tunnel riêng tại [OpenAI Platform Tunnels](https://platform.openai.com/settings/organization/tunnels).
+2. Tạo runtime key tại [Platform API Keys](https://platform.openai.com/settings/organization/api-keys), cần quyền Tunnels Read + Use.
+3. Cấu hình tunnel-client theo hướng dẫn để trỏ về MCP trên Windows.
+4. Trong **ChatGPT → Plugins → Add custom MCP server → Tunnel**, kết nối tunnel, hoàn tất OAuth và thử gọi tool.
+
+**Các bước đăng nhập, đồng ý quyền tài khoản và cảnh báo an toàn của ChatGPT/Windows là bắt buộc khi áp dụng.** Không thể âm thầm bỏ qua bằng phần mềm cài đặt. Sau khi kết nối thành công, công cụ có thể được dùng theo quyền đã cấp; hành động nhạy cảm vẫn có thể cần xác nhận.
 
 ## Chức năng
 
-- **Lập trình từ xa:** đọc mã nguồn, tìm kiếm, sửa file, chạy PowerShell và pytest, kiểm tra Git.
-- **Xác thực chủ máy:** OAuth 2.1, PKCE S256, cấp quyền theo phạm vi và cơ chế thu hồi.
-- **Sửa đổi có thể kiểm tra:** SHA-256 trước khi thay đổi file, backup và nhật ký audit.
-- **Điều khiển Windows:** chuột, bàn phím, cửa sổ và tác vụ khi có quyền phù hợp.
-- **Bảo vệ vận hành:** mặc định `read_only`, console quản trị và dừng khẩn cấp.
+- Thao tác file, lập trình, sửa mã nguồn, Git và chạy kiểm thử.
+- Điều khiển cửa sổ, chuột, bàn phím trong phiên Windows phù hợp.
+- OAuth chủ máy, cấp/thu hồi quyền, backup SHA-256, audit và dừng khẩn cấp.
 
-## Tương thích AI client
+Hiện dự án chỉ giới thiệu và nghiệm thu **ChatGPT**. Không mở trực tiếp cổng nội bộ ra Internet.
 
-| Client | Trạng thái |
-|---|---|
-| ChatGPT | Đã nghiệm thu trên hệ thống RC3 của chủ máy |
-| Claude, Cursor, Codex và MCP client khác | Chưa nghiệm thu, chưa cam kết hỗ trợ |
+**Tình trạng:** đang thử nghiệm v1.1.0. Trước bản stable còn cần kiểm tra trên máy Windows mới, khởi động lại, OAuth ChatGPT và rollback.
 
-## Cài đặt cục bộ một dòng — P0
+[Hướng dẫn cài đặt](docs/INSTALLATION.md) · [Xử lý lỗi](docs/TROUBLESHOOTING.md) · [Changelog](CHANGELOG.md)
 
-Chạy trong PowerShell trên Windows (cần Git):
-
-```powershell
-git clone https://github.com/phuonghuster7/winowner-mcp.git winowner-mcp; if ($LASTEXITCODE -eq 0) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\winowner-mcp\scripts\Bootstrap-WindowsMcp.ps1" }
-```
-
-Lệnh kiểm tra môi trường, cài dependency, đăng ký tác vụ Windows Task Scheduler có quyền hạn chế để tự chạy MCP cục bộ ở chế độ read-only khi chủ máy đăng nhập. Dùng `-DryRun` để kiểm tra không sửa hệ thống, hoặc `-Remove` để gỡ tác vụ và dừng tiến trình đã xác minh; không xóa credential nếu chưa được yêu cầu. **Không** tự ghép nối OAuth/ChatGPT và **không** cấp quyền Owner toàn ổ. Tính năng được thêm vào `main` khi merge PR #9; ZIP RC3 lịch sử không chứa bootstrap.
-
-## Cài đặt hiện tại
-
-Trên Windows 10/11, dùng Git và Python 3.12+, chạy PowerShell trong một thư mục thử nghiệm:
-
-```powershell
-git clone https://github.com/phuonghuster7/winowner-mcp.git
-cd winowner-mcp
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-WindowsMcpAgent.ps1 -DryRun
-```
-
-Lệnh `-DryRun` chỉ kiểm tra điều kiện, **chưa ghép nối OAuth/tunnel**. Chức năng cài đặt một dòng thuộc [PR #9](https://github.com/phuonghuster7/winowner-mcp/pull/9) và sẽ có trên `main` sau khi merge; bản ZIP RC3 cũ không thay đổi.
-
-## Phân quyền và giới hạn
-
-- `READ`: đọc, tìm kiếm, kiểm tra Git; mặc định được bật.
-- `WRITE`, `EXECUTE`, `DESKTOP`: cần ủy quyền hợp lệ.
-- `SYSTEM_ADMIN`: mặc định từ chối.
-- `OWNER_GLOBAL_FILESYSTEM`: chỉ bật khi chủ máy chủ động cấp quyền; không vượt qua NTFS/UAC.
-- Lọc lệnh bằng biểu thức chính quy chỉ là cơ chế giảm thao tác nhầm, **không phải sandbox**.
-- Một số test live auth, desktop và rollback chưa nằm trong CI tự động; chưa nghiệm thu rộng rãi trên Windows sạch.
-
-Đọc [SECURITY.md](SECURITY.md) và [hướng dẫn kết nối](docs/CONNECT_CHATGPT.md) trước khi mở quyền truy cập từ xa.
-
-Dự án độc lập, không liên kết hay được bảo trợ bởi Microsoft hoặc OpenAI. Giấy phép MIT.
+Dự án độc lập theo giấy phép MIT, không được OpenAI hay Microsoft bảo trợ.

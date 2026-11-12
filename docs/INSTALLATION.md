@@ -1,8 +1,8 @@
-# Installation — WinOwner MCP (v1.0.0-rc3 candidate)
+# Installation — WinOwner MCP v1.1.0 (development)
 
 ## Beginner / one-click local setup (no Git required)
 
-Download the source ZIP using **Code → Download ZIP** on https://github.com/phuonghuster7/winowner-mcp, extract it, then double-click **Install-WinOwner.cmd**. The wrapper invokes the already audited local bootstrap with Windows PowerShell 5.1 and displays errors instead of silently exiting. Python 3.12 is installed through winget if available, otherwise install from python.org and rerun. The result is **LOCAL_INSTALL_PASS**, not ChatGPT pairing.
+Download the source ZIP using **Code → Download ZIP** on https://github.com/phuonghuster7/winowner-mcp, extract it, then double-click **Install-WinOwner.cmd**. The wrapper invokes the already audited local bootstrap with Windows PowerShell 5.1 and displays errors instead of silently exiting. Python 3.12 is installed through winget if available, otherwise install from python.org and rerun. The result is **LOCAL_INSTALL_PASS** with authenticated owner_full_control profile, not ChatGPT pairing.
 
 Follow [Vietnamese A–Z walkthrough](START_HERE.vi.md) for Platform permissions, private tunnel, OAuth and a real ChatGPT tool call. Prior RC3 release ZIPs do not contain the new launcher; use a newer source snapshot/release.
 
@@ -41,7 +41,7 @@ Review the output and explicitly decide which local services, scheduled tasks an
 
 ## Configure your own identity and scope
 
-Start with example files under config/. Never copy the developer's actual policy.json, trusted_workspaces.json or tunnel-autonomous runtime files. Every machine and ChatGPT account needs its own OAuth owner onboarding, locally bound endpoints, tunnel setup and access scope. Keep read_only as the initial profile. Do not enable OWNER_GLOBAL_FILESYSTEM until identity, scope, audit, grants and revocation have been tested.
+Start with example files under config/. Never copy the developer's actual policy.json, trusted_workspaces.json or tunnel-autonomous runtime files. Every machine and ChatGPT account needs its own OAuth owner onboarding, locally bound endpoints, tunnel setup and access scope. One-click selects owner_full_control for verified owners; -ReadOnly is an optional restricted mode. Do not enable OWNER_GLOBAL_FILESYSTEM until identity, scope, audit, grants and revocation have been tested.
 
 ## Verify runtime
 

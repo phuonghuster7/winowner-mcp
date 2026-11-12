@@ -8,13 +8,13 @@ See [Vietnamese A–Z guide](START_HERE.vi.md) for downloading the ZIP, double-c
 
 Official Secure MCP Tunnel reference: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
 
-**Do not confuse ports:** the standalone read-only one-click adapter listens on **127.0.0.1:8768/mcp** by default. Ports 8765/8766 refer to optional components of the older full stack; do not point a new user's tunnel at those ports unless that stack is actually installed and authenticated. Local bootstrap does **not** install tunnel-client or authorize the ChatGPT plugin.
+**Do not confuse ports:** the standalone authenticated owner-profile one-click adapter listens on **127.0.0.1:8768/mcp** by default. Ports 8765/8766 refer to optional components of the older full stack; do not point a new user's tunnel at those ports unless that stack is actually installed and authenticated. Local bootstrap does **not** install tunnel-client or authorize the ChatGPT plugin.
 
 ## 1. Local safety checks
 
 - Install the pinned Python requirements and run `scripts/Install-WindowsMcpAgent.ps1 -DryRun` first.
 - Keep every local service bound to `127.0.0.1`. Do not expose 3080, 8765, 8766, 8767 or 8768 directly to the public Internet.
-- Start with the default **read_only** profile. Backup existing configs before changing privileges.
+- The beginner installer selects owner_full_control for verified owners; non-owners and anonymous callers remain denied. Backup existing configs before changing privileges.
 - Set up a unique OAuth owner identity and the operator's own private tunnel profile; no keys or tunnel IDs are distributed in this repository.
 
 ## 2. Check the local adapter

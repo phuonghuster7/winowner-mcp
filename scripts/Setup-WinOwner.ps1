@@ -1,10 +1,10 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Friendly front-end for the safe, read-only WinOwner MCP local installer.
+    Beginner front-end for Windows MCP: owner-full-control after verified OAuth.
 .DESCRIPTION
-    Does not provision a private tunnel, ChatGPT account, privileged owner grant,
-    or a public HTTP listener. Uses the existing verified bootstrap as a child
+    Does not bypass owner OAuth, tunnel association or the mandatory grant.
+    Uses the verified bootstrap as a child
     process so that its exit codes are preserved.
 #>
 [CmdletBinding()]
@@ -12,6 +12,7 @@ param(
     [switch]$DryRun,
     [switch]$NoPythonInstall,
     [switch]$NoOpenGuide,
+    [switch]$ReadOnly,
     [ValidateRange(1024, 65535)][int]$Port = 8768
 )
 Set-StrictMode -Version Latest
@@ -22,8 +23,27 @@ $bootstrap = Join-Path $PSScriptRoot "Bootstrap-WindowsMcp.ps1"
 $guide = Join-Path $root "docs\START_HERE.vi.md"
 $powershellExe = Join-Path $PSHOME "powershell.exe"
 
+function Write-SetupResult([string]$state, [string]$mode) {
+    # No secrets or OAuth values are written to this human-readable summary.
+    $resultPath = Join-Path $root "WinOwner-SETUP-RESULT.txt"
+    $lines = @(
+        "WinOwner MCP v1.1.0",
+        "Windows install status: $state",
+        "Local profile: $mode",
+        "ChatGPT connected: NOT YET (owner OAuth required)",
+        "Local MCP: http://127.0.0.1:$Port/mcp",
+        "Next steps: docs\START_HERE.vi.md",
+        "This file contains no keys or authentication tokens."
+    )
+    try {
+        [IO.File]::WriteAllText($resultPath, ($lines -join [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    } catch {
+        Write-Warning "Could not save the local setup result; check the installer console."
+    }
+}
 function Stop-Setup([string]$message, [int]$exitCode = 1) {
     Write-Host "[WinOwner] ERROR: $message" -ForegroundColor Red
+    Write-SetupResult "FAILED ($exitCode)" "UNVERIFIED"
     Write-Host "[WinOwner] Guide: $guide"
     exit $exitCode
 }
@@ -39,14 +59,17 @@ if (-not (Test-Path -LiteralPath $powershellExe -PathType Leaf)) {
 
 Write-Host "==========================================================="
 Write-Host " WinOwner MCP - LOCAL setup"
-Write-Host " Mode: $(if ($DryRun) { 'CHECK ONLY' } else { 'READ ONLY' }) | Port: $Port"
+$profile = if ($ReadOnly) { 'read_only' } else { 'owner_full_control' }
+Write-Host " Mode: $(if ($DryRun) { 'CHECK ONLY' } else { 'OWNER FULL CONTROL' }) | Port: $Port"
 Write-Host "==========================================================="
-Write-Host "This setup does not connect ChatGPT or grant remote file/desktop access."
+Write-Host "Full control is enabled for a verified, authorized owner only."
+Write-Host "Unauthenticated/non-owner clients remain blocked; ChatGPT OAuth pairing is required."
 Write-Host "It uses the current Windows account; no Administrator prompt is required."
 Write-Host ""
 $arguments = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"{0}"' -f $bootstrap), "-Port", "$Port")
 if ($DryRun) { $arguments += "-DryRun" }
 if ($NoPythonInstall) { $arguments += "-NoPythonInstall" }
+if (-not $ReadOnly) { $arguments += "-OwnerFullControl" }
 
 try {
     $child = Start-Process -FilePath $powershellExe -ArgumentList $arguments -WorkingDirectory $root -PassThru -Wait -NoNewWindow -ErrorAction Stop
@@ -58,7 +81,7 @@ try {
         exit 0
     }
     $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 5 -ErrorAction Stop
-    if ($health.status -ne "ok" -or
+    if ($health.status -ne "ok" -or $health.profile -ne $profile -or
         $health.require_autonomous_auth -ne $true -or
         $health.allow_loopback_tunnel_identity -ne $false) {
         Stop-Setup "Local health/auth safety checks failed. Do not configure a tunnel." 5
@@ -69,16 +92,17 @@ try {
     }
     $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($report.status -ne "LOCAL_INSTALL_PASS" -or $report.remote_oauth_paired -ne $false -or
-        $report.owner_global_filesystem_enabled -ne $false) {
+        $report.profile -ne $profile -or
+        $report.full_control_requires_verified_owner -ne $true -or
+        $report.owner_global_filesystem_enabled -ne (-not $ReadOnly)) {
         Stop-Setup "Unexpected bootstrap report. Review the local configuration." 5
     }
     Write-Host ""
-    Write-Host "LOCAL_INSTALL_PASS: protected read-only MCP on http://127.0.0.1:$Port/mcp" -ForegroundColor Green
+    Write-Host "LOCAL_INSTALL_PASS: protected owner profile ($profile) on http://127.0.0.1:$Port/mcp" -ForegroundColor Green
     Write-Host "NEXT: ChatGPT connection is NOT active. Follow docs\START_HERE.vi.md." -ForegroundColor Yellow
-    if (-not $NoOpenGuide) {
-        try { Start-Process -FilePath "notepad.exe" -ArgumentList ('"{0}"' -f $guide) | Out-Null }
-        catch { Write-Warning "Could not open the guide automatically: $($_.Exception.Message)" }
-    }
+    Write-Host "NEXT: Add your own tunnel in ChatGPT Plugins, then complete OAuth once." -ForegroundColor Yellow
+    Write-Host "No additional windows are launched by this installer."
+    Write-SetupResult "LOCAL_INSTALL_PASS" $profile
     exit 0
 } catch {
     Stop-Setup $_.Exception.Message 1
