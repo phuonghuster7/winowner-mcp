@@ -1,7 +1,8 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
 *.bat text eol=crlf
-*.cmd text eol=crlf
+# Windows CMD requires CRLF even in GitHub source ZIP archives.
+*.cmd -text whitespace=cr-at-eol
 *.vbs text eol=crlf
 *.png binary
 *.jpg binary

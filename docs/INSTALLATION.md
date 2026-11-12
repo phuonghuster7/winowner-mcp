@@ -2,9 +2,9 @@
 
 ## Beginner / one-click local setup (no Git required)
 
-Download the source ZIP using **Code → Download ZIP** on https://github.com/phuonghuster7/winowner-mcp, extract it, then double-click **Install-WinOwner.cmd**. The wrapper invokes the already audited local bootstrap with Windows PowerShell 5.1 and displays errors instead of silently exiting. Python 3.12 is installed through winget if available, otherwise install from python.org and rerun. The result is **LOCAL_INSTALL_PASS** with authenticated owner_full_control profile, not ChatGPT pairing.
+Open CMD and paste the one-line installation command from [START_HERE](START_HERE.vi.md). Alternatively download and extract the ZIP, then double-click **Install-WinOwner.cmd**. The wrapper invokes the locally tested bootstrap with Windows PowerShell 5.1 and displays errors instead of silently exiting. Python 3.12 is installed through winget if available, otherwise install from python.org and rerun. The result is **LOCAL_INSTALL_PASS** with authenticated owner_full_control profile, not ChatGPT pairing.
 
-Follow [Vietnamese A–Z walkthrough](START_HERE.vi.md) for Platform permissions, private tunnel, OAuth and a real ChatGPT tool call. Prior RC3 release ZIPs do not contain the new launcher; use a newer source snapshot/release.
+Follow the [short beginner guide](START_HERE.vi.md) for one-command local setup. For tunnel, Platform permissions and OAuth see the [advanced guide](ADVANCED_CHATGPT.vi.md). Prior RC3 release ZIPs do not contain the new launcher; use a newer source snapshot/release.
 
 ## Prerequisites
 
@@ -27,17 +27,17 @@ Prerequisite: Git on Windows. Paste into PowerShell:
 git clone https://github.com/phuonghuster7/winowner-mcp.git winowner-mcp; if ($LASTEXITCODE -eq 0) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\winowner-mcp\scripts\Bootstrap-WindowsMcp.ps1" }
 ```
 
-The bootstrap automatically creates the Python 3.12 virtual environment, installs dependencies, configures local read-only operation, creates a user-restricted local bearer [REDACTED], registers a least-privilege Task Scheduler job that runs the standalone adapter at owner logon, then tests /health and HTTP 401 without authentication. It fails closed when an unknown process uses the port or the task name is occupied; no firewall is opened. It can install Python 3.12 with winget where supported. Git itself cannot install or OAuth-pair an agent.
+The legacy bootstrap called on its own defaults to read_only; the beginner installer calls it with -OwnerFullControl. Both create the Python 3.12 virtual environment, install dependencies and automatically generate a protected local authentication value, registers a least-privilege Task Scheduler job that runs the standalone adapter at owner logon, then tests /health and HTTP 401 without authentication. It fails closed when an unknown process uses the port or the task name is occupied; no firewall is opened. It can install Python 3.12 with winget where supported. Git itself cannot install or OAuth-pair an agent.
 
 Run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Bootstrap-WindowsMcp.ps1 -DryRun` for a non-mutating check. Run with `-Remove` to stop the verified local adapter and unregister the auto-start task. Existing secrets and policies remain on disk for owner-controlled cleanup. Auto-start has been verified across separate command sessions, but a full Windows reboot remains a separate acceptance check.
 
-**LOCAL_INSTALL_PASS does NOT mean the ChatGPT connector is connected.** The operator must complete owner OAuth and private tunnel pairing using docs/CONNECT_CHATGPT.md. Owner full filesystem privileges are never provisioned automatically.
+**LOCAL_INSTALL_PASS does NOT mean the ChatGPT connector is connected.** The operator must complete owner OAuth and private tunnel pairing using docs/CONNECT_CHATGPT.md. The installer selects owner_full_control for an authenticated owner, but privileged tools still require owner OAuth and valid delegation.
 
 ## Verify installer before modifying your workstation
 
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Install-WindowsMcpAgent.ps1 -DryRun
 
-Review the output and explicitly decide which local services, scheduled tasks and ports should be installed before running the non-dry-run script. Test installation in a clean VM first; this candidate has not yet passed a fresh-machine public install gate.
+Review the output and explicitly decide which local services, scheduled tasks and ports should be installed before running the non-dry-run script. Test installation in a clean VM first; the automated Windows installer and cleanup gates have passed; additional account-pairing acceptance is tracked separately.
 
 ## Configure your own identity and scope
 

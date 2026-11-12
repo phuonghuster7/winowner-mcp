@@ -6,15 +6,17 @@
 
 > **v1.1.0 đang kiểm thử, chưa phải bản stable đã phát hành.** AI có thể chỉnh sửa file và điều khiển desktop bằng quyền của tài khoản Windows chạy agent. Chỉ cài trên máy mà bạn có quyền quản lý.
 
-## Cài bằng một lần nhấp đúp
+## Cài bằng một dòng CMD
 
-1. Vào trang GitHub này, chọn **Code → Download ZIP**.
-2. Nhấp phải file ZIP → **Extract All / Giải nén tất cả**.
-3. Mở thư mục đã giải nén, nhấp đúp **Install-WinOwner.cmd**.
+Mở CMD, dán một dòng rồi nhấn Enter:
+
+    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
+
+Có thể tải ZIP từ nhánh main, giải nén rồi nhấp đúp Install-WinOwner.cmd nếu muốn cài ngoại tuyến.
 
 Bộ cài tự tạo môi trường Python riêng, cài phụ thuộc, tạo Scheduled Task để MCP khởi động lúc đăng nhập. Nếu thiếu Python 3.12, công cụ thử cài qua winget.
 
-**Không hỏi nhập token nội bộ trong bước cài local:** khóa nội bộ được tạo và lưu tự động. Chỉ có cửa sổ cài đặt chính; không tự mở Notepad, không bắt bấm phím để kết thúc. Thành công sẽ hiện **LOCAL_INSTALL_PASS**. Sau khi cửa sổ đóng, mở **WinOwner-SETUP-RESULT.txt** ngay trong thư mục cài để xem kết quả; không cần mở PowerShell.
+**Không hỏi nhập token nội bộ trong bước cài local:** khóa nội bộ được tạo và lưu tự động. Chỉ có cửa sổ cài đặt chính; không tự mở Notepad, giữ cửa sổ để người dùng đọc kết quả trước khi nhấn phím đóng. Thành công sẽ hiện **LOCAL_INSTALL_PASS**. Sau khi cửa sổ đóng, mở **WinOwner-SETUP-RESULT.txt** ngay trong thư mục cài để xem kết quả; không cần mở PowerShell.
 
 **Mặc định: Owner Full Control.** Chế độ này chỉ cho phép chủ máy **đã xác thực OAuth và có delegation hợp lệ** sử dụng công cụ đọc/ghi file, Git, chạy lệnh và điều khiển desktop. Không tự cấp quyền Administrator, không cho người chưa xác thực hoặc người khác dùng quyền của chủ máy.
 
@@ -37,7 +39,7 @@ Cài Windows xong **chưa phải** kết nối ChatGPT. Mở [hướng dẫn A�
 
 Hiện dự án chỉ giới thiệu và nghiệm thu **ChatGPT**. Không mở trực tiếp cổng nội bộ ra Internet.
 
-**Tình trạng:** đang thử nghiệm v1.1.0. Trước bản stable còn cần kiểm tra trên máy Windows mới, khởi động lại, OAuth ChatGPT và rollback.
+**Tình trạng:** đang thử nghiệm v1.1.0. CI đã qua kiểm thử cài Windows và rollback; liên kết ChatGPT lần đầu cần chủ tài khoản thực hiện.
 
 [Hướng dẫn cài đặt](docs/INSTALLATION.md) · [Xử lý lỗi](docs/TROUBLESHOOTING.md) · [Changelog](CHANGELOG.md)
 

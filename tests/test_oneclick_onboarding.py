@@ -23,7 +23,8 @@ def test_beginner_entrypoint_and_release_inventory() -> None:
     batch = launcher.read_text(encoding="utf-8")
     assert "Setup-WinOwner.ps1" in batch
     assert "-ExecutionPolicy Bypass" in batch  # process-scoped, no registry modification
-    assert "\npause" not in batch.lower()  # no additional keypress required
+    assert "pause >nul" in batch.lower()  # the interactive double-click keeps results visible
+    assert 'if "%~1"==""' in batch  # automated/online installation never waits
     ps = setup.read_text(encoding="utf-8")
     assert "Bootstrap-WindowsMcp.ps1" in ps
     assert "allow_loopback_tunnel_identity" in ps
@@ -43,11 +44,18 @@ def test_beginner_entrypoint_and_release_inventory() -> None:
     assert (ROOT / "scripts" / "Test-WinOwnerOneClick.ps1").is_file()
     assert "Install-WinOwner.cmd" in builder.read_text(encoding="utf-8")
     docs = guide.read_text(encoding="utf-8")
-    assert "tunnel_id" in docs
-    assert "CONTROL_PLANE_API_KEY" in docs
+    advanced = (ROOT / "docs" / "ADVANCED_CHATGPT.vi.md").read_text(encoding="utf-8")
+    assert "tunnel_id" in advanced
+    assert "CONTROL_PLANE_API_KEY" in advanced
     assert "OAuth" in docs
-    assert "LOCAL_INSTALL_PASS" in docs
-    assert "127.0.0.1:8768" in docs
+    assert "Check-WinOwner.cmd" in docs
+    assert len(docs.encode("utf-8")) < 6000
+    assert "https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1" in docs
+    assert "go.ps1" in (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "*.cmd -text" in (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert (ROOT / "scripts" / "Test-WinOwnerOnline.ps1").is_file()
+    assert "8765/mcp" not in (ROOT / "docs" / "CONNECT_CHATGPT.md").read_text(encoding="utf-8")
+    assert "[REDACTED]" not in (ROOT / "docs" / "INSTALLATION.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ZIP builder only")
@@ -70,8 +78,16 @@ def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
     assert result.returncode == 0, (result.stdout, result.stderr)
     with zipfile.ZipFile(tmp_path / "winowner-mcp-v0-onboarding-ci.zip") as archive:
         names = archive.namelist()
-        assert "Install-WinOwner.cmd" in names
+        for required in ("go.ps1", "Install-WinOwner.cmd", "Check-WinOwner.cmd",
+                         "Uninstall-WinOwner.cmd", "scripts/Check-WinOwner.ps1",
+                         "docs/ADVANCED_CHATGPT.vi.md"):
+            assert required in names
         assert "scripts/Setup-WinOwner.ps1" in names
+        for cmd_file in ("Install-WinOwner.cmd", "Check-WinOwner.cmd", "Uninstall-WinOwner.cmd"):
+            raw = archive.read(cmd_file)
+            assert b"\r\n" in raw
+            assert raw.count(b"\r\n") == raw.count(b"\n"), f"{cmd_file} has Unix-only line endings"
+
         assert "docs/START_HERE.vi.md" in names
         assert "requirements.txt" in names
         assert all("\\" not in name for name in names)
@@ -105,3 +121,13 @@ def test_beginner_frontend_dry_run_does_not_install() -> None:
     assert "DRY_RUN_PASS" in result.stdout
     assert "LOCAL_INSTALL_PASS" not in result.stdout
     assert "profile=owner_full_control" in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell only")
+def test_one_command_online_bootstrap_dry_run() -> None:
+    cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+           "-File", str(ROOT / "go.ps1"), "-DryRun", "-Port", "18790"]
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert "DRY_RUN_PASS" in result.stdout
+    assert "github.com/phuonghuster7/winowner-mcp" in result.stdout

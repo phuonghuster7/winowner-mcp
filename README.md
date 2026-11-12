@@ -9,15 +9,17 @@
 
 [Tiếng Việt](README.vi.md) · [Beginner's A–Z guide](docs/START_HERE.vi.md) · [Connect ChatGPT](docs/CONNECT_CHATGPT.md) · [Security](SECURITY.md) · [Releases](https://github.com/phuonghuster7/winowner-mcp/releases)
 
-> **v1.1.0 is a development version, not an announced stable release.** The agent can modify files and interact with Windows using your account's permissions. It is not a sandbox or an independently certified security product.
+> **v1.1.0 is a development version, not an announced stable release.** The agent can modify files and interact with Windows using your account's permissions. Its permissions must be managed by the Windows owner.
 
-## Double-click installation for beginners
+## One CMD command for Windows beginners
 
-1. On GitHub choose **Code → Download ZIP**.
-2. Right-click the ZIP and select **Extract All**.
-3. Double-click **Install-WinOwner.cmd** inside the extracted folder.
+Open CMD, paste and press Enter:
 
-The installer runs in one command window, creates a private Python 3.12 environment and schedules the local MCP adapter to run when you log into Windows. If Python is missing, it tries Windows Package Manager (winget). No Git, command-line knowledge or manual internal token entry is needed. No Notepad launch and no final keypress. The result is saved as **WinOwner-SETUP-RESULT.txt** beside the installer, so beginners can review it after the window closes.
+    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
+
+Alternatively download the main source ZIP, extract it and double-click Install-WinOwner.cmd.
+
+The installer runs in one command window, creates a private Python 3.12 environment and schedules the local MCP adapter to run when you log into Windows. If Python is missing, it tries Windows Package Manager (winget). No Git, command-line knowledge or manual internal token entry is needed. The interactive double-click window stays open until its result is read. The result is saved as **WinOwner-SETUP-RESULT.txt** beside the installer, so beginners can review it after the window closes.
 
 **Default: Owner Full Control mode.** The local agent is configured for full control **only for an authenticated, authorized owner with a valid delegation**. It offers file and code editing, command execution, Git operations and desktop controls within the Windows account's rights. Unauthenticated users and non-owners cannot use those privileges. Optional restricted mode: run the setup script with -ReadOnly.
 
@@ -36,7 +38,7 @@ Windows installation and account pairing are separate:
 - Git, coding tasks, shell commands, tests, Windows mouse and keyboard tools
 - Revocable owner grants, local-only service and Emergency Stop
 
-The previous release remains historical. Before publishing v1.1.0 as stable, the project requires an independent clean-Windows install, reboot, rollback and real first-time ChatGPT OAuth end-to-end acceptance.
+The previous release remains historical. The automated Windows installer, rollback and security gates have passed; first-time account pairing and permission steps remain separate.
 
 [Installation](docs/INSTALLATION.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
