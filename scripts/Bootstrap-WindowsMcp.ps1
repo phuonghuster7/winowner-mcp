@@ -106,8 +106,17 @@ if ($Remove) {
         Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
     }
-    Start-Sleep -Milliseconds 400
-    Stop-VerifiedLocalListener
+    # Task Scheduler may take several seconds to terminate the service after
+    # Stop/Unregister on a busy CI runner. Wait for clean exit before attempting
+    # any verified process-level stop; never kill an unrecognized port owner.
+    $deadline = [DateTime]::UtcNow.AddSeconds(12)
+    while ((-not (Port-IsFree)) -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 300
+    }
+    if (-not (Port-IsFree)) {
+        Stop-VerifiedLocalListener
+        Start-Sleep -Milliseconds 400
+    }
     if (-not (Port-IsFree)) { throw "Removal incomplete: port $Port remains occupied." }
     Step "TASK_REMOVED: $taskName, verified local listener stopped. Credentials/config kept for owner review."
     exit 0
