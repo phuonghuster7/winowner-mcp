@@ -46,6 +46,16 @@ flowchart LR
 
 Other local gateway, bridge and backend services may be used by the full legacy stack. Their availability and ports depend on deployment; the standalone adapter does not automatically provision those services.
 
+## For beginners: double-click installer (no Git required)
+
+1. On this GitHub page select **Code → Download ZIP**, then **Extract All** in Windows.
+2. Open the extracted folder and double-click **Install-WinOwner.cmd**.
+3. Wait for **LOCAL_INSTALL_PASS** and follow the automatically opened Vietnamese guide: [Start here — A to Z](docs/START_HERE.vi.md).
+
+Requires Windows 10/11 and Python 3.12; the script attempts to install Python 3.12 via winget if available. The launcher installs a **local read-only** adapter and a current-user logon task; it does **not** create a tunnel, connect ChatGPT or grant owner-global access. Supported ChatGPT plugin access, a separate OpenAI Platform tunnel/runtime key and OAuth are required to finish remote pairing.
+
+**Important:** historical RC3 ZIP assets do not include this new launcher. Use a release containing Install-WinOwner.cmd or the latest source ZIP.
+
 ## One-line Windows setup — local read-only MCP
 
 Paste this **single line into PowerShell** (Git required; Python 3.12 can be installed with winget when available):

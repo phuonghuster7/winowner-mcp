@@ -18,7 +18,7 @@ param(
     [string]$ProjectRoot = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }),
     [string]$OutputDir = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "dist" } else { Join-Path (Get-Location).Path "dist" }),
     [string]$AttestationPath = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "runtime\evidence\test_run_attestation.json" } else { Join-Path (Get-Location).Path "runtime\evidence\test_run_attestation.json" }),
-    [string]$Version = "v1.0.0-rc3",
+    [string]$Version = "v1.0.0-rc4-preview",
     [switch]$RequireAttestation,
     [switch]$DryRun
 )
@@ -43,7 +43,7 @@ $candidateFiles = New-Object System.Collections.Generic.List[string]
 
 # Root files (.md, LICENSE, .gitignore, .gitattributes)
 Get-ChildItem -Path $ProjectRoot -File | Where-Object {
-    $_.Name -in @("LICENSE", ".gitignore", ".gitattributes", "requirements.txt", "requirements-dev.txt", "pytest.ini") -or $_.Extension -eq ".md"
+    $_.Name -in @("LICENSE", ".gitignore", ".gitattributes", "requirements.txt", "requirements-dev.txt", "pytest.ini", "Install-WinOwner.cmd") -or $_.Extension -eq ".md"
 } | ForEach-Object {
     $candidateFiles.Add($_.FullName.Substring($ProjectRoot.Length).TrimStart('\'))
 }
@@ -223,7 +223,23 @@ if (-not $DryRun) {
         if (Test-Path $ZipPath) {
             Remove-Item -Path $ZipPath -Force
         }
-        [System.IO.Compression.ZipFile]::CreateFromDirectory($packageStageDir, $ZipPath)
+        # .NET Framework on Windows may write backslash-delimited ZIP entries.
+        # Use standard forward-slash names so Windows and non-Windows extractors
+        # unpack the same relative paths; never archive mutable local secrets.
+        $archive = [System.IO.Compression.ZipFile]::Open(
+            $ZipPath, [System.IO.Compression.ZipArchiveMode]::Create
+        )
+        try {
+            Get-ChildItem -LiteralPath $packageStageDir -File -Recurse -Force |
+                Sort-Object FullName | ForEach-Object {
+                    $name = $_.FullName.Substring($packageStageDir.Length).TrimStart('\', '/').Replace('\', '/')
+                    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                        $archive, $_.FullName, $name, [System.IO.Compression.CompressionLevel]::Optimal
+                    ) | Out-Null
+                }
+        } finally {
+            $archive.Dispose()
+        }
     } finally {
         if (Test-Path $stagingRoot) {
             Remove-Item -Path $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue

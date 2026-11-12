@@ -1,5 +1,11 @@
 # Installation — WinOwner MCP (v1.0.0-rc3 candidate)
 
+## Beginner / one-click local setup (no Git required)
+
+Download the source ZIP using **Code → Download ZIP** on https://github.com/phuonghuster7/winowner-mcp, extract it, then double-click **Install-WinOwner.cmd**. The wrapper invokes the already audited local bootstrap with Windows PowerShell 5.1 and displays errors instead of silently exiting. Python 3.12 is installed through winget if available, otherwise install from python.org and rerun. The result is **LOCAL_INSTALL_PASS**, not ChatGPT pairing.
+
+Follow [Vietnamese A–Z walkthrough](START_HERE.vi.md) for Platform permissions, private tunnel, OAuth and a real ChatGPT tool call. Prior RC3 release ZIPs do not contain the new launcher; use a newer source snapshot/release.
+
 ## Prerequisites
 
 Use Windows 10/11 x64, PowerShell 5.1+ (or PowerShell 7), Python 3.12+, Git, and a dedicated user session. Review the security policy first. Do not expose the local MCP/console endpoints publicly.

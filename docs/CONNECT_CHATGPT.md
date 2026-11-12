@@ -2,6 +2,14 @@
 
 This is an **operator setup guide**, not an automatic activation script. It assumes you are the owner of the Windows host and have access to a supported ChatGPT MCP connector interface.
 
+## Start here for first-time users
+
+See [Vietnamese A–Z guide](START_HERE.vi.md) for downloading the ZIP, double-clicking the local installer, obtaining **tunnel_id** and **CONTROL_PLANE_API_KEY** from OpenAI Platform, installing the official tunnel-client, configuring OAuth and verifying the first real tool call.
+
+Official Secure MCP Tunnel reference: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
+
+**Do not confuse ports:** the standalone read-only one-click adapter listens on **127.0.0.1:8768/mcp** by default. Ports 8765/8766 refer to optional components of the older full stack; do not point a new user's tunnel at those ports unless that stack is actually installed and authenticated. Local bootstrap does **not** install tunnel-client or authorize the ChatGPT plugin.
+
 ## 1. Local safety checks
 
 - Install the pinned Python requirements and run `scripts/Install-WindowsMcpAgent.ps1 -DryRun` first.

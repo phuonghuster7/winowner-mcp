@@ -91,6 +91,12 @@ jobs:
         run: |
           python -m pytest -q tests/test_production_oauth_persistence_security.py
 
+      - name: Beginner one-click installer and fresh-checkout regression
+        shell: pwsh
+        run: |
+          python -m pytest -q tests/test_oneclick_onboarding.py tests/test_s10_machine_independent_installer.py
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-ReleasePackage.ps1 -DryRun
+
       - name: Single-line bootstrap safety dry-run
         shell: pwsh
         run: |

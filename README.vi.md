@@ -8,6 +8,14 @@ WinOwner MCP là agent cho phép AI được chủ máy xác thực thực hiệ
 
 > **Bản RC thử nghiệm, có quyền tác động tới máy tính.** Agent thực thi trong phạm vi quyền của tài khoản Windows chạy nó; đây không phải sandbox và chưa được kiểm toán bảo mật độc lập.
 
+## Cài cho người mới — nhấp đúp, không cần Git
+
+1. Vào GitHub → **Code → Download ZIP**, sau đó **Extract All** (giải nén).
+2. Trong thư mục vừa giải nén, nhấp đúp **Install-WinOwner.cmd**.
+3. Chờ **LOCAL_INSTALL_PASS**. Đọc [Hướng dẫn đầy đủ A–Z](docs/START_HERE.vi.md) được mở bằng Notepad.
+
+Cần Windows 10/11; nếu chưa có Python 3.12, bộ cài thử sử dụng winget. **Bước này chỉ cài MCP cục bộ ở chế độ read_only.** Để kết nối ChatGPT còn cần quyền custom MCP, tunnel_id, runtime API key và OAuth. Bản RC3 ZIP trước đây chưa chứa launcher mới.
+
 ## Chức năng
 
 - **Lập trình từ xa:** đọc mã nguồn, tìm kiếm, sửa file, chạy PowerShell và pytest, kiểm tra Git.

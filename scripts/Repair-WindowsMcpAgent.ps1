@@ -90,10 +90,16 @@ if ((-not (Test-Path $policyPath)) -and (Test-Path $policyExamplePath) -and (-no
 
 $policyValid = $false
 $policyDetails = ""
+# A fresh checkout has no installed policy yet. Validate the safe example in
+# dry-run mode without copying it or modifying the workstation.
+$policyCandidatePath = $policyPath
+if ($DryRun -and (-not (Test-Path $policyPath)) -and (Test-Path $policyExamplePath)) {
+    $policyCandidatePath = $policyExamplePath
+}
 
-if (Test-Path $policyPath) {
+if (Test-Path $policyCandidatePath) {
     try {
-        $policyObj = Get-Content -Path $policyPath -Raw | ConvertFrom-Json
+        $policyObj = Get-Content -Path $policyCandidatePath -Raw | ConvertFrom-Json
         $hasProfiles = (
             $null -ne $policyObj.profiles -and
             $null -ne $policyObj.profiles.read_only -and
@@ -216,7 +222,7 @@ $reportDir = Split-Path -Parent $reportPath
 if (-not (Test-Path $reportDir) -and (-not $DryRun)) {
     New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
 }
-if (Test-Path $reportDir) {
+if ((-not $DryRun) -and (Test-Path $reportDir)) {
     [System.IO.File]::WriteAllText(
         $reportPath,
         ($reportObj | ConvertTo-Json -Depth 6),
