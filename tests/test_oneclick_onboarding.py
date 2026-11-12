@@ -74,7 +74,7 @@ def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
         "-Version",
         "v0-onboarding-ci",
     ]
-    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=45)
+    result = subprocess.run(cmd, cwd=tmp_path, capture_output=True, text=True, timeout=45)
     assert result.returncode == 0, (result.stdout, result.stderr)
     with zipfile.ZipFile(tmp_path / "winowner-mcp-v0-onboarding-ci.zip") as archive:
         names = archive.namelist()

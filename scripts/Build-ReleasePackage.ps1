@@ -250,12 +250,15 @@ if (-not $DryRun) {
     $zipSizeBytes = $zipItem.Length
     $zipSha256 = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToUpperInvariant()
 
-    $gitCommit = (& git rev-parse HEAD 2>$null).Trim()
-    if (-not $gitCommit) { $gitCommit = "28d9ed50f4902b166eb0a066cc868fa2ba5b0f46" }
-    $gitBranch = (& git branch --show-current 2>$null).Trim()
-    if (-not $gitBranch) { $gitBranch = "feat/codex-master-windows-mcp-coding-access" }
+    # GitHub Actions may use a detached HEAD or launch this builder from a
+    # different current directory. Always query ProjectRoot; never call .Trim()
+    # on a null result from a no-output Git command.
+    $gitCommit = (@(& git -C $ProjectRoot rev-parse HEAD 2>$null) -join "").Trim()
+    if (-not $gitCommit) { $gitCommit = "unknown" }
+    $gitBranch = (@(& git -C $ProjectRoot branch --show-current 2>$null) -join "").Trim()
+    if (-not $gitBranch) { $gitBranch = "DETACHED_HEAD" }
 
-    $gitStatus = (& git status --porcelain 2>$null)
+    $gitStatus = (& git -C $ProjectRoot status --porcelain 2>$null)
     $workingTreeClean = [string]::IsNullOrWhiteSpace(($gitStatus -join "").Trim())
 
     $junitSummary = $null
