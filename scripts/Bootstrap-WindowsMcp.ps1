@@ -18,6 +18,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $venv = Join-Path $root ".venv\Scripts\python.exe"
+$venvW = Join-Path $root ".venv\Scripts\pythonw.exe"
 $runner = Join-Path $root "scripts\Run-WinOwnerMcp.py"
 $adapter = Join-Path $root "mcp-gateway\cloud_autonomous_adapter.py"
 $policyExample = Join-Path $root "config\policy.example.json"
@@ -57,9 +58,11 @@ function Managed-Task {
     $t = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($t) {
         $a = @($t.Actions)
+        $execOk = ($a[0].Execute.IndexOf($venv, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+                  ($a[0].Execute.IndexOf($venvW, [StringComparison]::OrdinalIgnoreCase) -ge 0)
         if ($a.Count -ne 1 -or -not $a[0].Arguments -or
             $a[0].Arguments.IndexOf($runner, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
-            $a[0].Execute.IndexOf($venv, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+            (-not $execOk) -or
             @($identity, $env:USERNAME, ("$env:USERDOMAIN\$env:USERNAME")) -notcontains $t.Principal.UserId) {
             throw "Task name collision for $taskName; refusing to modify another task."
         }
@@ -206,8 +209,9 @@ Assert-RestrictedAcl $tokenPath
 Assert-RestrictedAcl $ownerKeyPath
 if ($NoStart) { Step "LOCAL_PREPARED: no task started or registered"; exit 0 }
 $created = $false
+$taskPython = if (Test-Path -LiteralPath $venvW) { $venvW } else { $venv }
 $arguments = ('-u "{0}" --port {1} --profile {2}' -f $runner, $Port, $profile)
-$action = New-ScheduledTaskAction -Execute $venv -Argument $arguments -WorkingDirectory $root
+$action = New-ScheduledTaskAction -Execute $taskPython -Argument $arguments -WorkingDirectory $root
 if (-not $task) {
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
     $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
