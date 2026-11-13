@@ -10,10 +10,12 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Ref = 'main',
+    [string]$Ref = 'v1.1.1',
     [ValidateRange(1024,65535)][int]$Port = 8768,
     [string]$InstallRoot = '',
     [string]$ArchivePath = '',
+    [string]$ExpectedSha256 = '',
+    [switch]$AllowUnpinned,
     [switch]$NoPythonInstall,
     [switch]$Update,
     [switch]$DryRun
@@ -21,6 +23,20 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# Explicit TLS 1.2 for Windows PowerShell 5.1 HTTPS downloads
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+# Environment variable overrides allow `irm <url> | iex` to pass options without param binding
+if (-not $PSBoundParameters.ContainsKey('Ref') -and $env:WINOWNER_REF) { $Ref = $env:WINOWNER_REF }
+if (-not $PSBoundParameters.ContainsKey('Port') -and $env:WINOWNER_PORT) { $Port = [int]$env:WINOWNER_PORT }
+if (-not $PSBoundParameters.ContainsKey('InstallRoot') -and $env:WINOWNER_INSTALL_ROOT) { $InstallRoot = $env:WINOWNER_INSTALL_ROOT }
+if (-not $PSBoundParameters.ContainsKey('ArchivePath') -and $env:WINOWNER_ARCHIVE_PATH) { $ArchivePath = $env:WINOWNER_ARCHIVE_PATH }
+if (-not $PSBoundParameters.ContainsKey('ExpectedSha256') -and $env:WINOWNER_SHA256) { $ExpectedSha256 = $env:WINOWNER_SHA256 }
+if (-not $AllowUnpinned -and $env:WINOWNER_ALLOW_UNPINNED -eq '1') { $AllowUnpinned = $true }
+if (-not $NoPythonInstall -and $env:WINOWNER_NO_PYTHON_INSTALL -eq '1') { $NoPythonInstall = $true }
+if (-not $Update -and $env:WINOWNER_UPDATE -eq '1') { $Update = $true }
+if (-not $DryRun -and $env:WINOWNER_DRYRUN -eq '1') { $DryRun = $true }
+
 $project = 'phuonghuster7/winowner-mcp'
 $display = 'WinOwner MCP v1.1.1'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
@@ -29,11 +45,22 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 if ($Ref -notmatch '^[a-zA-Z0-9_./-]+$' -or $Ref.Contains('..') -or $Ref.StartsWith('/')) {
     throw 'Invalid repository reference.'
 }
+$isPinnedTag = ($Ref -match '^v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$')
+if (-not $isPinnedTag -and -not $AllowUnpinned) {
+    throw "Refusing unpinned ref '$Ref' without -AllowUnpinned (or WINOWNER_ALLOW_UNPINNED=1)."
+}
 if (-not $InstallRoot) {
     $InstallRoot = Join-Path $env:LOCALAPPDATA 'WinOwnerMCP\v1.1.1'
 }
 $InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
-$archiveUrl = "https://github.com/$project/archive/refs/heads/$Ref.zip"
+$assetName = "winowner-mcp-$Ref.zip"
+if ($isPinnedTag) {
+    $archiveUrl = "https://github.com/$project/releases/download/$Ref/$assetName"
+    $checksumsUrl = "https://github.com/$project/releases/download/$Ref/SHA256SUMS.txt"
+} else {
+    $archiveUrl = "https://github.com/$project/archive/refs/heads/$Ref.zip"
+    $checksumsUrl = ''
+}
 $tempDir = ''
 Write-Host ''
 Write-Host "==== $display - ONLINE SETUP ====" -ForegroundColor Cyan
@@ -41,7 +68,7 @@ Write-Host "Install folder: $InstallRoot"
 Write-Host 'The local installer defaults to safe read_only mode. Run Enable-FullControl.cmd if needed.'
 Write-Host 'ChatGPT OAuth and tunnel account authorization are required separately.'
 if ($DryRun) {
-    Write-Host "DRY_RUN_PASS: download=$archiveUrl"
+    Write-Host "DRY_RUN_PASS: download=$archiveUrl checksums=$checksumsUrl pinned=$isPinnedTag"
     exit 0
 }
 function Find-PreviousInstallRoot([string]$targetRoot, [int]$targetPort) {
@@ -134,6 +161,33 @@ try {
         }
         if ((Get-Item -LiteralPath $zip).Length -lt 30000) {
             throw 'Downloaded archive is unexpectedly small.'
+        }
+        # Verify SHA-256 checksum for pinned release or explicit ExpectedSha256
+        $expectedHash = $ExpectedSha256.Trim().ToUpperInvariant()
+        if (-not $expectedHash -and -not $ArchivePath -and $checksumsUrl) {
+            $sumsPath = Join-Path $tempDir 'SHA256SUMS.txt'
+            Invoke-WebRequest -Uri $checksumsUrl -OutFile $sumsPath -UseBasicParsing -MaximumRedirection 5 -TimeoutSec 60
+            $sumsLines = Get-Content -LiteralPath $sumsPath -Encoding UTF8
+            foreach ($line in $sumsLines) {
+                if ($line -match '^\s*([a-fA-F0-9]{64})\s+\*?(.+?)\s*$') {
+                    if ($Matches[2] -eq $assetName) {
+                        $expectedHash = $Matches[1].ToUpperInvariant()
+                        break
+                    }
+                }
+            }
+            if (-not $expectedHash) {
+                throw "Checksum for $assetName was not found in SHA256SUMS.txt."
+            }
+        }
+        if ($expectedHash) {
+            $actualHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToUpperInvariant()
+            if ($actualHash -ne $expectedHash) {
+                throw "SHA-256 verification failed! Expected $expectedHash, got $actualHash."
+            }
+            Write-Host "SHA-256 verified: $actualHash"
+        } elseif ($isPinnedTag -and -not $ArchivePath) {
+            throw 'Missing SHA-256 checksum for pinned release.'
         }
         $unpack = Join-Path $tempDir 'unpacked'
         Expand-Archive -LiteralPath $zip -DestinationPath $unpack -Force

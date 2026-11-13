@@ -101,6 +101,7 @@ jobs:
         shell: pwsh
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Bootstrap-WindowsMcp.ps1 -DryRun -Port 18769
+          powershell.exe -NoProfile -Command "$env:WINOWNER_DRYRUN='1'; iex (Get-Content -LiteralPath '.\go.ps1' -Raw)"
 
       - name: P0 isolated local service install, restart and cleanup
         shell: pwsh
