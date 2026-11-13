@@ -167,5 +167,11 @@ def test_05_repair_and_rollback_scripts_dryrun():
         text=True,
         cwd=str(PROJECT_ROOT),
     )
-    assert res_rollback.returncode == 0, f"Rollback script DryRun failed: {res_rollback.stderr}\n{res_rollback.stdout}"
-    assert "(DRY-RUN)" in res_rollback.stdout or "Rollback" in res_rollback.stdout
+    baseline = PROJECT_ROOT / "backups" / "baseline_p0" / "baseline_hashes.json"
+    if baseline.is_file():
+        assert res_rollback.returncode == 0, f"Rollback dry-run failed: {res_rollback.stderr}\n{res_rollback.stdout}"
+        assert "DRY-RUN" in res_rollback.stdout
+    else:
+        # No baseline on a public checkout: rollback MUST fail closed.
+        assert res_rollback.returncode != 0
+        assert "Baseline hash manifest not found" in (res_rollback.stderr + res_rollback.stdout)

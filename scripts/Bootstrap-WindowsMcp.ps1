@@ -1,14 +1,15 @@
 #requires -Version 5.1
 <#
 WinOwner MCP safe local bootstrap.
-Installs read-only local adapter; registers restartable current-user Task Scheduler task.
-Remote OAuth pairing and owner-global filesystem are never enabled automatically.
+Installs authenticated local adapter; registers restartable current-user Task Scheduler task.
+Owner full-control mode only applies to an authenticated owner; anonymous access remains denied. Remote ChatGPT OAuth pairing is a separate required step.
 #>
 [CmdletBinding()]
 param(
     [switch]$DryRun,
     [switch]$NoStart,
     [switch]$NoPythonInstall,
+    [switch]$OwnerFullControl,
     [switch]$Remove,
     [ValidateRange(1024,65535)][int]$Port = 8768
 )
@@ -25,6 +26,7 @@ $tokenPath = Join-Path $secretDir "gateway_caller.token"
 $logDir = Join-Path $root "runtime\logs"
 $taskName = "WinOwnerMCP-$Port"
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+$profile = if ($OwnerFullControl) { 'owner_full_control' } else { 'read_only' }
 function Step([string]$s) { Write-Host "[WinOwner] $s" }
 function Check-Exit([string]$s) { if ($LASTEXITCODE -ne 0) { throw "$s failed: $LASTEXITCODE" } }
 function Port-IsFree {
@@ -59,13 +61,21 @@ function Managed-Task {
             @($identity, $env:USERNAME, ("$env:USERDOMAIN\$env:USERNAME")) -notcontains $t.Principal.UserId) {
             throw "Task name collision for $taskName; refusing to modify another task."
         }
+        # Refuse silently changing the profile of an existing task.
+        # Allow -Remove to cleanly remove either verified mode.
+        if (-not $Remove) {
+            $taskIsFull = $a[0].Arguments -match '(?i)(?:^|\s)--profile\s+owner_full_control(?:\s|$)'
+            if ($taskIsFull -ne [bool]$OwnerFullControl) {
+                throw "Existing WinOwner task uses a different profile; use another port or explicitly remove the task."
+            }
+        }
     }
     return $t
 }
 function Healthy-And-Authenticated {
     try {
         $h = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 2
-        if ($h.status -ne "ok" -or $h.require_autonomous_auth -ne $true -or
+        if ($h.status -ne "ok" -or $h.profile -ne $profile -or $h.require_autonomous_auth -ne $true -or
             $h.allow_loopback_tunnel_identity -ne $false) { return $false }
         try {
             $body = '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
@@ -96,8 +106,17 @@ if ($Remove) {
         Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
     }
-    Start-Sleep -Milliseconds 400
-    Stop-VerifiedLocalListener
+    # Task Scheduler may take several seconds to terminate the service after
+    # Stop/Unregister on a busy CI runner. Wait for clean exit before attempting
+    # any verified process-level stop; never kill an unrecognized port owner.
+    $deadline = [DateTime]::UtcNow.AddSeconds(12)
+    while ((-not (Port-IsFree)) -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 300
+    }
+    if (-not (Port-IsFree)) {
+        Stop-VerifiedLocalListener
+        Start-Sleep -Milliseconds 400
+    }
     if (-not (Port-IsFree)) { throw "Removal incomplete: port $Port remains occupied." }
     Step "TASK_REMOVED: $taskName, verified local listener stopped. Credentials/config kept for owner review."
     exit 0
@@ -109,7 +128,7 @@ $task = Managed-Task
 $free = Port-IsFree
 if ($DryRun) {
     $py = Find-Python
-    Step "DRY_RUN Python312=$([bool]$py) port_free=$free task_exists=$([bool]$task)"
+    Step "DRY_RUN profile=$profile Python312=$([bool]$py) port_free=$free task_exists=$([bool]$task)"
     if (-not $py -and $NoPythonInstall) { throw "Python 3.12 unavailable" }
     exit 0
 }
@@ -155,7 +174,7 @@ Check-Exit "private token ACL"
 if ($NoStart) { Step "LOCAL_PREPARED: no task started or registered"; exit 0 }
 $created = $false
 if (-not $task) {
-    $arguments = ('-u "{0}" --port {1}' -f $runner, $Port)
+    $arguments = ('-u "{0}" --port {1} --profile {2}' -f $runner, $Port, $profile)
     $action = New-ScheduledTaskAction -Execute $venv -Argument $arguments -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
     $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
@@ -176,11 +195,13 @@ try {
     $report = [ordered]@{
         status="LOCAL_INSTALL_PASS"; url="http://127.0.0.1:$Port/mcp";
         task_name=$taskName; auto_start_at_owner_logon=$true;
-        profile="read_only"; anonymous_mcp_denied=$true;
-        remote_oauth_paired=$false; owner_global_filesystem_enabled=$false
+        profile=$profile; anonymous_mcp_denied=$true;
+        remote_oauth_paired=$false; owner_global_filesystem_enabled=[bool]$OwnerFullControl;
+        full_control_requires_verified_owner=$true
     }
     [IO.File]::WriteAllText((Join-Path $logDir "bootstrap-report.json"),($report | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
-    Step "LOCAL_INSTALL_PASS: $taskName running; auto-start at owner logon."
+    Step "LOCAL_INSTALL_PASS: $taskName running ($profile); auto-start at owner logon."
+    if ($OwnerFullControl) { Step "Full-control tools require verified owner OAuth and an active owner delegation." }
     Step "Remote OAuth/tunnel pairing is NOT complete; consult docs/CONNECT_CHATGPT.md."
 } catch {
     if ($created) {

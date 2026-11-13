@@ -357,6 +357,8 @@ def create_cloud_autonomous_adapter_app(
             "host": "127.0.0.1",
             "port": 8768,
             "surface": "cloud_autonomous",
+            "profile": str(getattr(gw.policy, "profile", "read_only")),
+            "owner_full_control_requires_oauth": True,
             "strict_autonomous_tools_only": not coding_enabled,
             "exposed_tools": exposed,
             "require_autonomous_auth": app.state.require_autonomous_auth,

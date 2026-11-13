@@ -1263,7 +1263,7 @@ def test_release_identity_consistency_contract():
     assert "source_commit" in rel_id
     assert "build_id" in rel_id
     assert "zip_sha256" in rel_id
-    assert rel_id["release_version"].startswith("v1.0.0-rc")
+    assert rel_id["release_version"].startswith("v1.1.")
     assert rel_id["source_commit"] not in ("", "HEAD")
 
     # 1. initialize RPC response

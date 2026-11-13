@@ -4,6 +4,7 @@ This does not replace human review or a full secret scanner.
 """
 from __future__ import annotations
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +14,9 @@ REQUIRED = [
     "README.md", "LICENSE", "SECURITY.md", "CONTRIBUTING.md",
     "requirements.txt", "requirements-dev.txt", "pytest.ini",
     "docs/INSTALLATION.md", "docs/PUBLIC_RELEASE_CHECKLIST.md",
+    "docs/START_HERE.vi.md", "docs/ADVANCED_CHATGPT.vi.md",
+    "go.ps1", "Install-WinOwner.cmd", "Check-WinOwner.cmd", "Uninstall-WinOwner.cmd",
+    "scripts/Check-WinOwner.ps1", "scripts/Setup-WinOwner.ps1",
     ".github/workflows/ci-security.yml", "config/policy.example.json",
 ]
 BAD_PARTS = {"backups", "secrets", "dist", "agent-coordination"}
@@ -29,7 +33,23 @@ issues = []
 for name in REQUIRED:
     if not (ROOT / name).is_file():
         issues.append(f"required file missing: {name}")
-for path in ROOT.rglob("*"):
+def source_paths():
+    # Include tracked files and new, non-ignored source files.
+    # Ignore generated ZIPs and runtime data only when Git marks them ignored.
+    # Tracked files in forbidden paths are still checked and rejected.
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=ROOT, capture_output=True, check=True, timeout=15,
+        )
+        return (ROOT / raw.decode("utf-8", "surrogateescape")
+                for raw in proc.stdout.split(b"\0") if raw)
+    except (OSError, subprocess.SubprocessError):
+        # Support an extracted source ZIP without Git.
+        return ROOT.rglob("*")
+
+
+for path in source_paths():
     if not path.is_file():
         continue
     rel = path.relative_to(ROOT)

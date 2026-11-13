@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — v1.1.0 ChatGPT owner-first onboarding
+
+- Added a double-click **Install-WinOwner.cmd** launcher and **scripts/Setup-WinOwner.ps1**, selecting authenticated owner_full_control while preserving OAuth and owner delegation. A ZIP extraction now works without first installing Git.
+- Added Vietnamese [A–Z setup guide](docs/START_HERE.vi.md) documenting Platform tunnel roles, runtime key vs admin key, supported tunnel-client, OAuth and an actual ChatGPT tool call.
+- Updated both READMEs, install/pairing docs, release inventory, source guard and Windows CI checks.
+- Fixed Repair -DryRun on a fresh checkout to validate the example policy without writing a live policy or report; rollback without a valid baseline remains fail-closed.
+- Verified the local installer dry-run, selected regression tests and package inventory. Fresh-machine cloud OAuth/tunnel E2E and reboot recovery still require separate acceptance before stable production release.
+
+
 ## Unreleased — P0 Windows bootstrap and OAuth hardening
 
 - Upgraded vulnerable runtime dependencies (MCP SDK 2.3.0, Pillow 13.0.0, cryptography 50.0.2, AnyIO 4.16.0, pydantic-settings 2.14.2), with pip-audit reporting 0 known advisories on the locked top-level requirements as tested; the audit now fails CI on new findings.
