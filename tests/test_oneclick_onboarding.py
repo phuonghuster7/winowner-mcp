@@ -6,6 +6,8 @@ import socket
 import subprocess
 import zipfile
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 import pytest
 
@@ -37,10 +39,12 @@ def test_beginner_entrypoint_and_release_inventory() -> None:
     assert "Get-Credential" not in ps
     for name in ("README.md", "README.vi.md"):
         introduction = (ROOT / name).read_text(encoding="utf-8")
-        assert "v1.1.0" in introduction
+        assert "v1.2.0" in introduction
         assert "ChatGPT" in introduction
         assert not any(name in introduction for name in ("Claude", "Cursor", "Gemini"))
     assert "LOCAL_INSTALL_PASS" in ps
+    assert "LegacyInstallRoot" in (ROOT / "go.ps1").read_text(encoding="utf-8")
+    assert "UpgradeConfirmed" in (ROOT / "go.ps1").read_text(encoding="utf-8")
     assert (ROOT / "scripts" / "Test-WinOwnerOneClick.ps1").is_file()
     assert "Install-WinOwner.cmd" in builder.read_text(encoding="utf-8")
     docs = guide.read_text(encoding="utf-8")
@@ -50,7 +54,7 @@ def test_beginner_entrypoint_and_release_inventory() -> None:
     assert "OAuth" in docs
     assert "Check-WinOwner.cmd" in docs
     assert len(docs.encode("utf-8")) < 6000
-    assert "https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1" in docs
+    assert "https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1" in docs
     assert "go.ps1" in (ROOT / "README.md").read_text(encoding="utf-8")
     assert "*.cmd -text" in (ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert (ROOT / "scripts" / "Test-WinOwnerOnline.ps1").is_file()
@@ -62,15 +66,15 @@ def test_nontech_chatgpt_journey_is_honest_and_actionable() -> None:
     vi = (ROOT / "README.vi.md").read_text(encoding="utf-8")
     en = (ROOT / "README.md").read_text(encoding="utf-8")
     quick = (ROOT / "docs" / "START_HERE.vi.md").read_text(encoding="utf-8")
-    expected = 'powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"'
+    expected = 'powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"'
     for page in (vi, en, quick):
         assert expected in page
-        assert "full MCP" in page
+        assert "Authentication" in page or "Full Control" in page
         assert "Check-WinOwner.cmd" in page
         assert "Uninstall-WinOwner.cmd" in page
-        assert "OAuth" in page
+        assert "Authentication" in page or "OAuth" in page or "owner" in page
         assert "WinOwner MCP" in page
-    assert "Business" in vi and "Enterprise/Edu" in en
+    assert "Connect-ChatGPT.cmd" in vi and "Connect-ChatGPT.cmd" in en
     assert "\u0054\u0048\u00c0\u004e\u0048 \u0043\u00d4\u004e\u0047" in quick
     assert "\u0054\u0048\u1ea4\u0054 \u0042\u1ea0\u0049" in quick
     assert "Win + R" in quick
@@ -81,6 +85,25 @@ def test_nontech_chatgpt_journey_is_honest_and_actionable() -> None:
     assert "127.0.0.1:8765/mcp" not in (
         ROOT / "docs" / "CONNECT_CHATGPT.md"
     ).read_text(encoding="utf-8")
+
+
+def test_chatgpt_authentication_none_is_not_anonymous_owner_access() -> None:
+    guide = (ROOT / "docs" / "AUTH_NONE.vi.md").read_text(encoding="utf-8")
+    intro = (ROOT / "docs" / "START_HERE.vi.md").read_text(encoding="utf-8")
+    cli = (ROOT / "go.ps1").read_text(encoding="utf-8")
+    setup = (ROOT / "scripts" / "Setup-WinOwner.ps1").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "scripts" / "Bootstrap-WindowsMcp.ps1").read_text(encoding="utf-8")
+    for page in (guide, intro):
+        assert "Authentication None" in page
+        assert "401" in page
+    assert "Authentication: None" in guide
+    assert "owner" in guide
+    assert "capability grant" in guide
+    assert "Authentication None is possible with an authenticated tunnel" in cli
+    assert "Authentication None requires a separately secured tunnel" in setup
+    assert "$h.require_autonomous_auth -ne $true" in bootstrap
+    assert "$h.allow_loopback_tunnel_identity -ne $false" in bootstrap
+    assert "remote_oauth_paired=$false" in bootstrap
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ZIP builder only")
@@ -104,10 +127,12 @@ def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
     with zipfile.ZipFile(tmp_path / "winowner-mcp-v0-onboarding-ci.zip") as archive:
         names = archive.namelist()
         for required in ("go.ps1", "Install-WinOwner.cmd", "Check-WinOwner.cmd",
-                         "Uninstall-WinOwner.cmd", "scripts/Check-WinOwner.ps1",
-                         "docs/ADVANCED_CHATGPT.vi.md"):
+                         "Uninstall-WinOwner.cmd", "Connect-ChatGPT.cmd", "Grant-OwnerAccess.cmd", "Show-OwnerKey.cmd", "scripts/Check-WinOwner.ps1",
+                         "docs/ADVANCED_CHATGPT.vi.md", "docs/AUTH_NONE.vi.md"):
             assert required in names
         assert "scripts/Setup-WinOwner.ps1" in names
+        assert "scripts/Connect-ChatGPT.ps1" in names
+        assert "scripts/Run-WinOwnerTunnel.ps1" in names
         for cmd_file in ("Install-WinOwner.cmd", "Check-WinOwner.cmd", "Uninstall-WinOwner.cmd"):
             raw = archive.read(cmd_file)
             assert b"\r\n" in raw
@@ -145,7 +170,80 @@ def test_beginner_frontend_dry_run_does_not_install() -> None:
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert "DRY_RUN_PASS" in result.stdout
     assert "LOCAL_INSTALL_PASS" not in result.stdout
-    assert "profile=owner_full_control" in result.stdout
+    assert "profile=read_only" in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell and local HTTP server only")
+def test_exact_irm_pipe_iex_entrypoint_without_install() -> None:
+    # Exercise the actual one-line web installation route using a local HTTP
+    # server and an explicit dry-run environment flag. Never touch production.
+    source = (ROOT / "go.ps1").read_bytes()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path != "/go.ps1":
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(source)))
+            self.end_headers()
+            self.wfile.write(source)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        script = (
+            "$env:WINOWNER_BOOTSTRAP_DRYRUN='1';"
+            f"irm http://127.0.0.1:{server.server_port}/go.ps1|iex"
+        )
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert "DRY_RUN_PASS" in result.stdout
+        assert "refs/tags/v1.2.0.zip" in result.stdout
+        assert "LOCAL_INSTALL_PASS" not in result.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_official_tunnel_client_security_contract() -> None:
+    connector = (ROOT / "scripts" / "Connect-ChatGPT.ps1").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts" / "Run-WinOwnerTunnel.ps1").read_text(encoding="utf-8")
+    assert "openai/tunnel-client/releases/download" in connector
+    assert "SHA256SUMS.txt" in connector
+    assert "SHA256" in connector
+    assert "cloudflared.exe" in connector and "cloudflared-manifest.json" in connector
+    assert "icacls.exe" in connector
+    assert "Run-WinOwnerTunnel.ps1" in connector
+    assert "env:CONTROL_PLANE_API_KEY" in connector
+    assert "env:WINOWNER_INTERNAL_AUTH" in connector
+    assert "allow_loopback_tunnel_identity" in connector
+    assert "require_autonomous_auth" in connector
+    assert "mcp_oat_" not in connector  # No implicit owner impersonation
+    assert "ReadAllText" in runner
+    assert "Show-OwnerKey" in (ROOT / "README.vi.md").read_text(encoding="utf-8")
+    assert "Grant-OwnerAccess" in (ROOT / "README.md").read_text(encoding="utf-8")
+    grant = (ROOT / "scripts" / "Grant-OwnerAccess.ps1").read_text(encoding="utf-8")
+    # The owner delegation manager must share the active server's OAuth DB,
+    # NOT create separate runtime/oauth_state.db and use an unrelated key.
+    assert "runtime\\secrets\\oauth.db" in grant
+    assert "runtime\\secrets\\secrets\\oauth_signing.key" in grant
+    assert "--oauth-db $activeDb" in grant
+    assert "--signing-key-file $signingFile" in grant
+    assert "read_only" in grant and "OwnerFullControl" in grant
+
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell only")

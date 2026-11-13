@@ -1,31 +1,29 @@
-# WinOwner MCP — v1.1.0
+# WinOwner MCP v1.2.0 — private Windows MCP for ChatGPT
 
-**Install a Windows MCP agent with one CMD command to connect it to ChatGPT.** The local installer defaults to Owner Full Control, effective only for an authenticated, authorized owner.
+**One CMD installer. Read-only by default; owner Full Control requires explicit approval.**
 
-## Check ChatGPT access first
+## 1. Install
 
-Open **ChatGPT web → Plugins → + → Add custom MCP server**. Windows write/modify tools require a workspace that supports custom **full MCP** connections. According to [OpenAI's current documentation](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt), full MCP is available to **Business and Enterprise/Edu**, while Pro custom MCP connections are limited to read/fetch. If your account lacks the custom MCP option, the Windows component can still install but ChatGPT pairing cannot be completed through this guide.
+Open Windows CMD and paste this pinned release command only after v1.2.0 is published:
 
-## Install locally with one CMD command
+    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 
-Open **Start → Command Prompt (cmd)**, paste and press Enter:
+The installer prepares Windows in %LOCALAPPDATA%\WinOwnerMCP\v1.2.0. Git is not required. **LOCAL_INSTALL_PASS** means local service health, not that the ChatGPT app has connected.
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
+## 2. Connect ChatGPT
 
-WinOwner downloads to %LOCALAPPDATA%\WinOwnerMCP\v1.1.0, installs Python 3.12 if missing and winget is available, and creates a local startup task. No internal MCP token entry is required.
+Open the installation directory. Double-click Check-WinOwner.cmd, then Connect-ChatGPT.cmd. Enter your tunnel ID and hidden runtime API key. This verifies the official tunnel-client ZIP checksum, creates a private profile and registers a background scheduled task.
 
-**SUCCESS** confirms the *Windows installation*, **not ChatGPT account pairing**. For failures, read the error in CMD. Do not disable SmartScreen or Defender to work around warnings.
+On ChatGPT select Plugins → Add custom MCP server → Connection: Tunnel → Authentication: None. Select your private tunnel. Confirm functionality by calling a read-only tool. Your account/workspace still needs permission to add custom MCP servers.
 
-## Check and stop the service
+## 3. Owner permissions
 
-Press **Win + R**, paste %LOCALAPPDATA%\WinOwnerMCP\v1.1.0 and press Enter. Double-click **Check-WinOwner.cmd** to check the local service. **Uninstall-WinOwner.cmd** stops the agent and unregisters auto-start. Program files, settings and credentials remain; this is not a complete deletion of data.
+Authentication None does not mean anonymous access to Windows. The backend requires authentication; owner commands require verified owner delegation. Run Grant-OwnerAccess.cmd to review and confirm elevated scope, and Show-OwnerKey.cmd only when a trusted owner-authorization field specifically needs the token. Never paste owner tokens into the OpenAI Platform runtime API key form; clipboard content is sensitive.
 
-## Connect ChatGPT
+## 4. Stop and revoke
 
-The account owner must create/select a private Platform tunnel, keep tunnel-client running and authorize OAuth in ChatGPT. The local installer cannot grant these account permissions. See the [advanced guide](docs/ADVANCED_CHATGPT.vi.md).
+Uninstall-WinOwner.cmd unregisters the local service but preserves configuration and secrets. Revoke the corresponding remote ChatGPT plugin and tunnel access separately.
 
-**A real WinOwner tool call from ChatGPT is required for end-to-end acceptance.** Local service health alone is insufficient.
+[Quick guide](docs/START_HERE.vi.md) · [Authentication None](docs/AUTH_NONE.vi.md) · [Security](SECURITY.md) · [Vietnamese](README.vi.md)
 
-[Beginner guide](docs/START_HERE.vi.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Security](SECURITY.md) · [Tiếng Việt](README.vi.md)
-
-MIT licensed; independent of OpenAI and Microsoft.
+MIT licensed, independent of OpenAI and Microsoft.

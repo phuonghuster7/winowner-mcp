@@ -1,35 +1,35 @@
-# WinOwner MCP — v1.1.0
+# WinOwner MCP v1.2.0 — kết nối Windows với ChatGPT
 
-**Cài phần mềm điều khiển Windows qua ChatGPT bằng một dòng CMD.** Chế độ mặc định là Owner Full Control, chỉ có hiệu lực với chủ máy đã xác thực và có quyền hợp lệ.
+**Cài bằng một lệnh CMD. Mặc định chỉ đọc; Full Control phải do chủ máy cấp quyền riêng.**
 
-## Trước khi cài: kiểm tra quyền ChatGPT
+## 1. Cài trên Windows 10/11
 
-Trên ChatGPT web, mở **Plugins → + → Add custom MCP server**. Để ChatGPT ghi/sửa file hay điều khiển Windows, workspace cần hỗ trợ **full MCP** và cho phép tạo kết nối tùy chỉnh. Theo tài liệu OpenAI hiện tại, full MCP dành cho **Business, Enterprise/Edu**; Pro chỉ dùng custom MCP với quyền read/fetch. Không thấy mục này thì phần cài Windows vẫn làm được, nhưng chưa thể hoàn tất kết nối ChatGPT bằng quy trình repo. Xem [tài liệu OpenAI](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
+Mở CMD, dán dòng sau sau khi bản v1.2.0 được phát hành:
 
-## 1. Một lệnh CMD trên Windows 10/11
+    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 
-Nhấn **Start**, tìm **cmd**, mở **Command Prompt**, dán rồi nhấn Enter:
+Cài tự động vào thư mục %LOCALAPPDATA%\WinOwnerMCP\v1.2.0. Không cần Git. Nếu máy thiếu Python 3.12, trình cài dùng winget khi sẵn có.
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
+**LOCAL_INSTALL_PASS** chỉ xác nhận Windows MCP cục bộ, chưa phải ChatGPT đã kết nối.
 
-Bộ cài tự tải về %LOCALAPPDATA%\WinOwnerMCP\v1.1.0, cài Python 3.12 nếu cần và có winget, tạo dịch vụ MCP tự chạy khi đăng nhập. **Không nhập token nội bộ**.
+## 2. Kiểm tra và kết nối ChatGPT
 
-**THÀNH CÔNG** nghĩa là cài Windows xong, **không đồng nghĩa ChatGPT đã kết nối**. Nếu **THẤT BẠI**, đọc thông báo trong CMD; không tắt SmartScreen hoặc Defender để né cảnh báo.
+Nhấn Win + R, mở:
 
-## 2. Kiểm tra hoặc gỡ dịch vụ
+    %LOCALAPPDATA%\WinOwnerMCP\v1.2.0
 
-Nhấn **Win + R**, dán đường dẫn này rồi Enter:
+Nhấp đúp Check-WinOwner.cmd, rồi Connect-ChatGPT.cmd. Nhập tunnel_id và runtime API key vào ô nhập ẩn. Trình cài tải tunnel-client chính thức, kiểm hash, tạo profile bảo vệ và task chạy nền.
 
-    %LOCALAPPDATA%\WinOwnerMCP\v1.1.0
+Trong ChatGPT vào Plugins → + → Add custom MCP server. Chọn Connection: Tunnel, chọn tunnel của mình, rồi Authentication: None. Kiểm tra bằng một lệnh đọc thật. Nếu không thấy tùy chọn thêm MCP, kiểm tra quyền tạo MCP của tài khoản/workspace.
 
-Nhấp đúp **Check-WinOwner.cmd** để kiểm tra dịch vụ và truy cập chưa xác thực. Nhấp đúp **Uninstall-WinOwner.cmd** để dừng dịch vụ, gỡ tác vụ tự khởi động. **Tệp chương trình, cấu hình và khóa riêng vẫn được giữ lại**, chưa phải xóa sạch dữ liệu khỏi máy.
+## 3. Nếu cần Full Control
 
-## 3. Liên kết ChatGPT
+Mặc định read_only. Nhấp Grant-OwnerAccess.cmd để xem cảnh báo và xác nhận cấp quyền cho client đã xác thực. Show-OwnerKey.cmd chỉ copy token khi chính chủ đồng ý. **Không dán owner token vào màn hình OpenAI Platform API key**: đây là hai loại credential khác nhau. Clipboard có thể bị ứng dụng khác đọc.
 
-Người có quyền lần đầu tạo/chọn tunnel trên OpenAI Platform, chạy tunnel-client rồi xác nhận OAuth trong ChatGPT. Không thể cấp quyền tài khoản thay người dùng bằng CMD. [Hướng dẫn dành cho người quản trị](docs/ADVANCED_CHATGPT.vi.md).
+## 4. Dừng và gỡ
 
-**Chỉ coi là đã kết nối khi ChatGPT gọi được một công cụ WinOwner thật.** Đừng dựa vào thông báo cài Windows hoặc cổng đang mở.
+Uninstall-WinOwner.cmd dừng agent và task. Tệp cấu hình cùng key không bị xóa tự động; gỡ plugin/tunnel trên ChatGPT riêng khi muốn ngắt quyền truy cập.
 
-[Hướng dẫn người mới](docs/START_HERE.vi.md) · [Khắc phục lỗi](docs/TROUBLESHOOTING.md) · [Bảo mật](SECURITY.md) · [English](README.md)
+[Hướng dẫn ngắn](docs/START_HERE.vi.md) · [Authentication None](docs/AUTH_NONE.vi.md) · [Bảo mật](SECURITY.md) · [English](README.md)
 
-Dự án độc lập theo giấy phép MIT, không được OpenAI hay Microsoft bảo trợ.
+MIT, độc lập với OpenAI và Microsoft.

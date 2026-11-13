@@ -1,4 +1,4 @@
-# Installation — WinOwner MCP v1.1.0 (development)
+# Installation — WinOwner MCP v1.2.0 (development)
 
 ## Beginner / one-click local setup (no Git required)
 
@@ -27,11 +27,11 @@ Prerequisite: Git on Windows. Paste into PowerShell:
 git clone https://github.com/phuonghuster7/winowner-mcp.git winowner-mcp; if ($LASTEXITCODE -eq 0) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\winowner-mcp\scripts\Bootstrap-WindowsMcp.ps1" }
 ```
 
-The legacy bootstrap called on its own defaults to read_only; the beginner installer calls it with -OwnerFullControl. Both create the Python 3.12 virtual environment, install dependencies and automatically generate a protected local authentication value, registers a least-privilege Task Scheduler job that runs the standalone adapter at owner logon, then tests /health and HTTP 401 without authentication. It fails closed when an unknown process uses the port or the task name is occupied; no firewall is opened. It can install Python 3.12 with winget where supported. Git itself cannot install or OAuth-pair an agent.
+Both the legacy bootstrap and the beginner installer default to read_only; Owner Full Control requires explicit opt-in. Both create the Python 3.12 virtual environment, install dependencies and automatically generate a protected local authentication value, registers a least-privilege Task Scheduler job that runs the standalone adapter at owner logon, then tests /health and HTTP 401 without authentication. It fails closed when an unknown process uses the port or the task name is occupied; no firewall is opened. It can install Python 3.12 with winget where supported. Git itself cannot install or OAuth-pair an agent.
 
 Run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Bootstrap-WindowsMcp.ps1 -DryRun` for a non-mutating check. Run with `-Remove` to stop the verified local adapter and unregister the auto-start task. Existing secrets and policies remain on disk for owner-controlled cleanup. Auto-start has been verified across separate command sessions, but a full Windows reboot remains a separate acceptance check.
 
-**LOCAL_INSTALL_PASS does NOT mean the ChatGPT connector is connected.** The operator must complete owner OAuth and private tunnel pairing using docs/CONNECT_CHATGPT.md. The installer selects owner_full_control for an authenticated owner, but privileged tools still require owner OAuth and valid delegation.
+**LOCAL_INSTALL_PASS does NOT mean the ChatGPT connector is connected.** Connect the private tunnel using Connect-ChatGPT.cmd. Authentication None is valid at ChatGPT plugin creation when backend auth is configured. The local default is read_only; privileged tools require explicit owner verification and grants.
 
 ## Verify installer before modifying your workstation
 
@@ -41,7 +41,7 @@ Review the output and explicitly decide which local services, scheduled tasks an
 
 ## Configure your own identity and scope
 
-Start with example files under config/. Never copy the developer's actual policy.json, trusted_workspaces.json or tunnel-autonomous runtime files. Every machine and ChatGPT account needs its own OAuth owner onboarding, locally bound endpoints, tunnel setup and access scope. One-click selects owner_full_control for verified owners; -ReadOnly is an optional restricted mode. Do not enable OWNER_GLOBAL_FILESYSTEM until identity, scope, audit, grants and revocation have been tested.
+Start with example files under config/. Never copy the developer's actual policy.json, trusted_workspaces.json or tunnel-autonomous runtime files. Every machine and ChatGPT account needs its own OAuth owner onboarding, locally bound endpoints, tunnel setup and access scope. One-click defaults to read_only; -OwnerFullControl is an explicit opt-in for authorized owners. Do not enable OWNER_GLOBAL_FILESYSTEM until identity, scope, audit, grants and revocation have been tested.
 
 ## Verify runtime
 

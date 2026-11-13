@@ -17,6 +17,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $venv = Join-Path $root ".venv\Scripts\python.exe"
+$pythonWindowless = Join-Path $root ".venv\Scripts\pythonw.exe"
 $runner = Join-Path $root "scripts\Run-WinOwnerMcp.py"
 $adapter = Join-Path $root "mcp-gateway\cloud_autonomous_adapter.py"
 $policyExample = Join-Path $root "config\policy.example.json"
@@ -57,7 +58,7 @@ function Managed-Task {
         $a = @($t.Actions)
         if ($a.Count -ne 1 -or -not $a[0].Arguments -or
             $a[0].Arguments.IndexOf($runner, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
-            $a[0].Execute.IndexOf($venv, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+            (@($venv, $pythonWindowless) -notcontains $a[0].Execute) -or
             @($identity, $env:USERNAME, ("$env:USERDOMAIN\$env:USERNAME")) -notcontains $t.Principal.UserId) {
             throw "Task name collision for $taskName; refusing to modify another task."
         }
@@ -175,11 +176,11 @@ if ($NoStart) { Step "LOCAL_PREPARED: no task started or registered"; exit 0 }
 $created = $false
 if (-not $task) {
     $arguments = ('-u "{0}" --port {1} --profile {2}' -f $runner, $Port, $profile)
-    $action = New-ScheduledTaskAction -Execute $venv -Argument $arguments -WorkingDirectory $root
+    $action = New-ScheduledTaskAction -Execute $pythonWindowless -Argument $arguments -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
     $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "WinOwner MCP read-only local adapter, current-user logon" | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "WinOwner MCP authenticated local adapter, current-user logon" | Out-Null
     $created = $true
 }
 try {
