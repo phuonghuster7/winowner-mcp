@@ -15,13 +15,14 @@ param(
     [string]$InstallRoot = '',
     [string]$ArchivePath = '',
     [switch]$NoPythonInstall,
+    [switch]$Update,
     [switch]$DryRun
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $project = 'phuonghuster7/winowner-mcp'
-$display = 'WinOwner MCP v1.1.0'
+$display = 'WinOwner MCP v1.1.1'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'Windows 10/11 is required.'
 }
@@ -29,7 +30,7 @@ if ($Ref -notmatch '^[a-zA-Z0-9_./-]+$' -or $Ref.Contains('..') -or $Ref.StartsW
     throw 'Invalid repository reference.'
 }
 if (-not $InstallRoot) {
-    $InstallRoot = Join-Path $env:LOCALAPPDATA 'WinOwnerMCP\v1.1.0'
+    $InstallRoot = Join-Path $env:LOCALAPPDATA 'WinOwnerMCP\v1.1.1'
 }
 $InstallRoot = [IO.Path]::GetFullPath($InstallRoot)
 $archiveUrl = "https://github.com/$project/archive/refs/heads/$Ref.zip"
@@ -43,14 +44,84 @@ if ($DryRun) {
     Write-Host "DRY_RUN_PASS: download=$archiveUrl"
     exit 0
 }
+function Find-PreviousInstallRoot([string]$targetRoot, [int]$targetPort) {
+    $parent = Split-Path -Path $targetRoot -Parent
+    if ((Test-Path -LiteralPath (Join-Path $targetRoot 'scripts\Bootstrap-WindowsMcp.ps1')) -and
+        (Test-Path -LiteralPath (Join-Path $targetRoot 'runtime\secrets'))) {
+        return $targetRoot
+    }
+    try {
+        $task = Get-ScheduledTask -TaskName "WinOwnerMCP-$targetPort" -ErrorAction SilentlyContinue
+        if ($task -and $task.Actions.Count -eq 1 -and $task.Actions[0].WorkingDirectory) {
+            $wd = [IO.Path]::GetFullPath($task.Actions[0].WorkingDirectory)
+            if (Test-Path -LiteralPath (Join-Path $wd 'scripts\Bootstrap-WindowsMcp.ps1')) {
+                return $wd
+            }
+        }
+    } catch {}
+    if (Test-Path -LiteralPath $parent -PathType Container) {
+        $dirs = Get-ChildItem -LiteralPath $parent -Directory |
+            Where-Object {
+                $_.FullName -ne $targetRoot -and
+                $_.Name -ne 'backups' -and
+                (Test-Path -LiteralPath (Join-Path $_.FullName 'scripts\Bootstrap-WindowsMcp.ps1'))
+            } |
+            Sort-Object LastWriteTimeUtc -Descending
+        if ($dirs) { return $dirs[0].FullName }
+    }
+    return $null
+}
+
+function Backup-WinOwnerState([string]$sourceRoot, [string]$backupDir) {
+    New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+    $srcSecrets = Join-Path $sourceRoot 'runtime\secrets'
+    if (Test-Path -LiteralPath $srcSecrets -PathType Container) {
+        Copy-Item -LiteralPath $srcSecrets -Destination (Join-Path $backupDir 'secrets') -Recurse -Force
+    }
+    $srcPolicy = Join-Path $sourceRoot 'config\policy.json'
+    if (Test-Path -LiteralPath $srcPolicy -PathType Leaf) {
+        New-Item -ItemType Directory -Path (Join-Path $backupDir 'config') -Force | Out-Null
+        Copy-Item -LiteralPath $srcPolicy -Destination (Join-Path $backupDir 'config\policy.json') -Force
+    }
+}
+
+function Restore-WinOwnerState([string]$backupDir, [string]$destRoot) {
+    $bkSecrets = Join-Path $backupDir 'secrets'
+    if (Test-Path -LiteralPath $bkSecrets -PathType Container) {
+        $dstSecrets = Join-Path $destRoot 'runtime\secrets'
+        New-Item -ItemType Directory -Path $dstSecrets -Force | Out-Null
+        Copy-Item -Path (Join-Path $bkSecrets '*') -Destination $dstSecrets -Recurse -Force
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        & icacls.exe $dstSecrets /inheritance:r /grant:r "$($id):(OI)(CI)F" "SYSTEM:(OI)(CI)F" | Out-Null
+    }
+    $bkPolicy = Join-Path $backupDir 'config\policy.json'
+    if (Test-Path -LiteralPath $bkPolicy -PathType Leaf) {
+        $dstConfig = Join-Path $destRoot 'config'
+        New-Item -ItemType Directory -Path $dstConfig -Force | Out-Null
+        Copy-Item -LiteralPath $bkPolicy -Destination (Join-Path $dstConfig 'policy.json') -Force
+    }
+}
+
+$backupDir = ''
+$previousRoot = $null
 try {
     $setupFile = Join-Path $InstallRoot 'Install-WinOwner.cmd'
-    if (Test-Path -LiteralPath $InstallRoot) {
+    if ($Update) {
+        $previousRoot = Find-PreviousInstallRoot $InstallRoot $Port
+        if ($previousRoot) {
+            $parent = Split-Path -Path $InstallRoot -Parent
+            $backupDir = Join-Path $parent ("backups\" + (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))
+            Write-Host "Backing up secrets and policy from $previousRoot..."
+            Backup-WinOwnerState $previousRoot $backupDir
+        }
+    }
+    $needDownload = (-not (Test-Path -LiteralPath $InstallRoot))
+    if ((Test-Path -LiteralPath $InstallRoot) -and -not $Update) {
         if (-not (Test-Path -LiteralPath $setupFile -PathType Leaf)) {
             throw "Install folder is occupied by another directory: $InstallRoot. Refusing overwrite."
         }
         Write-Host 'Existing WinOwner folder found; checking and repairing without deleting user settings.'
-    } else {
+    } elseif ($needDownload -or $Update) {
         $tempDir = Join-Path $env:TEMP ("winowner-download-" + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
         $zip = Join-Path $tempDir 'source.zip'
@@ -88,17 +159,33 @@ try {
         if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
             New-Item -ItemType Directory -Path $parent -Force | Out-Null
         }
-        # Move only after validating the complete archive. Never overwrite an existing install.
         if (Test-Path -LiteralPath $InstallRoot) {
-            throw 'Install folder appeared while downloading; refusing overwrite.'
+            if (-not (Test-Path -LiteralPath $setupFile -PathType Leaf)) {
+                throw "Install folder is occupied by another directory: $InstallRoot. Refusing overwrite."
+            }
+            $oldArchive = "$InstallRoot.prev-" + [Guid]::NewGuid().ToString('N').Substring(0,8)
+            Move-Item -LiteralPath $InstallRoot -Destination $oldArchive -ErrorAction Stop
+            try {
+                Move-Item -LiteralPath $candidates[0].FullName -Destination $InstallRoot -ErrorAction Stop
+            } catch {
+                if (-not (Test-Path -LiteralPath $InstallRoot) -and (Test-Path -LiteralPath $oldArchive)) {
+                    Move-Item -LiteralPath $oldArchive -Destination $InstallRoot -ErrorAction SilentlyContinue
+                }
+                throw
+            }
+            if ($backupDir) { Restore-WinOwnerState $backupDir $InstallRoot }
+        } else {
+            Move-Item -LiteralPath $candidates[0].FullName -Destination $InstallRoot -ErrorAction Stop
+            if ($backupDir) { Restore-WinOwnerState $backupDir $InstallRoot }
         }
-        Move-Item -LiteralPath $candidates[0].FullName -Destination $InstallRoot -ErrorAction Stop
     }
     Write-Host ''
     Write-Host 'Installing and checking Windows MCP...'
+    $setupPs1 = Join-Path $InstallRoot 'scripts\Setup-WinOwner.ps1'
     $installerArgs = @('-NoOpenGuide','-Port',[string]$Port)
     if ($NoPythonInstall) { $installerArgs += '-NoPythonInstall' }
-    & $setupFile @installerArgs
+    if ($Update) { $installerArgs += '-Upgrade' }
+    & $setupPs1 @installerArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Local installer reported exit code $LASTEXITCODE. Check WinOwner-SETUP-RESULT.txt in $InstallRoot."
     }

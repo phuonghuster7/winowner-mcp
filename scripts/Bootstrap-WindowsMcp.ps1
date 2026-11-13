@@ -11,6 +11,7 @@ param(
     [switch]$NoPythonInstall,
     [switch]$OwnerFullControl,
     [switch]$SwitchProfile,
+    [switch]$Upgrade,
     [switch]$Remove,
     [ValidateRange(1024,65535)][int]$Port = 8768
 )
@@ -58,17 +59,27 @@ function Managed-Task {
     $t = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($t) {
         $a = @($t.Actions)
-        $execOk = ($a[0].Execute.IndexOf($venv, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or
-                  ($a[0].Execute.IndexOf($venvW, [StringComparison]::OrdinalIgnoreCase) -ge 0)
-        if ($a.Count -ne 1 -or -not $a[0].Arguments -or
-            $a[0].Arguments.IndexOf($runner, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
-            (-not $execOk) -or
+        $hasValidArgs = ($a.Count -eq 1 -and $a[0].Arguments)
+        if ($hasValidArgs) {
+            if ($Upgrade) {
+                $execOk = $a[0].Execute -match '(?i)\\\.venv\\Scripts\\pythonw?\.exe$'
+                $runnerOk = ($a[0].Arguments -match '(?i)scripts\\Run-WinOwnerMcp\.py') -and ($a[0].Arguments -match ("(?<!\S)--port\s+" + $Port + "(?=\s|$)"))
+            } else {
+                $execOk = ($a[0].Execute.IndexOf($venv, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+                          ($a[0].Execute.IndexOf($venvW, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+                $runnerOk = $a[0].Arguments.IndexOf($runner, [StringComparison]::OrdinalIgnoreCase) -ge 0
+            }
+        } else {
+            $execOk = $false
+            $runnerOk = $false
+        }
+        if (-not $hasValidArgs -or (-not $runnerOk) -or (-not $execOk) -or
             @($identity, $env:USERNAME, ("$env:USERDOMAIN\$env:USERNAME")) -notcontains $t.Principal.UserId) {
             throw "Task name collision for $taskName; refusing to modify another task."
         }
-        # Refuse silently changing the profile of an existing task unless -SwitchProfile is explicitly set.
+        # Refuse silently changing the profile of an existing task unless -SwitchProfile or -Upgrade is explicitly set.
         # Allow -Remove to cleanly remove either verified mode.
-        if (-not $Remove -and -not $SwitchProfile) {
+        if (-not $Remove -and -not $SwitchProfile -and -not $Upgrade) {
             $taskIsFull = $a[0].Arguments -match '(?i)(?:^|\s)--profile\s+owner_full_control(?:\s|$)'
             if ($taskIsFull -ne [bool]$OwnerFullControl) {
                 throw "Existing WinOwner task uses a different profile; use -SwitchProfile or explicitly remove the task."
@@ -96,9 +107,10 @@ function Stop-VerifiedLocalListener {
     $listeners = Get-NetTCPConnection -LocalAddress "127.0.0.1" -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
     foreach ($listener in $listeners) {
         $proc = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $listener.OwningProcess)
-        if (-not $proc -or -not $proc.CommandLine -or
-            ($proc.CommandLine.IndexOf($runner, [StringComparison]::OrdinalIgnoreCase) -lt 0 -and
-             $proc.CommandLine.IndexOf($adapter, [StringComparison]::OrdinalIgnoreCase) -lt 0) -or
+        $isRunner = ($proc.CommandLine.IndexOf($runner, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+                    ($proc.CommandLine.IndexOf($adapter, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+                    ($Upgrade -and ($proc.CommandLine -match '(?i)scripts\\Run-WinOwnerMcp\.py'))
+        if (-not $proc -or -not $proc.CommandLine -or (-not $isRunner) -or
             $proc.CommandLine -notmatch ("(?<!\S)--port\s+" + $Port + "(?=\s|$)")) {
             throw "Refusing to stop unverified listener on port $Port."
         }
@@ -137,11 +149,16 @@ if ($DryRun) {
     if (-not $py -and $NoPythonInstall) { throw "Python 3.12 unavailable" }
     exit 0
 }
-if ($task -and -not $SwitchProfile -and (Healthy-And-Authenticated)) {
+if ($task -and -not $SwitchProfile -and -not $Upgrade -and (Healthy-And-Authenticated)) {
     Step "LOCAL_INSTALL_PASS: existing managed task is healthy; no changes made."
     exit 0
 }
-if ($task -and $SwitchProfile) {
+if ($task -and ($SwitchProfile -or $Upgrade)) {
+    if ($Upgrade -and -not $SwitchProfile -and -not $OwnerFullControl) {
+        if ($task.Actions[0].Arguments -match '(?i)(?:^|\s)--profile\s+owner_full_control(?:\s|$)') {
+            $profile = 'owner_full_control'
+        }
+    }
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     $deadline = [DateTime]::UtcNow.AddSeconds(12)
     while ((-not (Port-IsFree)) -and [DateTime]::UtcNow -lt $deadline) {
@@ -209,6 +226,7 @@ Assert-RestrictedAcl $tokenPath
 Assert-RestrictedAcl $ownerKeyPath
 if ($NoStart) { Step "LOCAL_PREPARED: no task started or registered"; exit 0 }
 $created = $false
+$previousAction = $null
 $taskPython = if (Test-Path -LiteralPath $venvW) { $venvW } else { $venv }
 $arguments = ('-u "{0}" --port {1} --profile {2}' -f $runner, $Port, $profile)
 $action = New-ScheduledTaskAction -Execute $taskPython -Argument $arguments -WorkingDirectory $root
@@ -218,7 +236,8 @@ if (-not $task) {
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "WinOwner MCP $profile local adapter, current-user logon" | Out-Null
     $created = $true
-} elseif ($SwitchProfile) {
+} elseif ($SwitchProfile -or $Upgrade) {
+    $previousAction = $task.Actions[0]
     Set-ScheduledTask -TaskName $taskName -Action $action | Out-Null
 }
 try {
@@ -246,6 +265,13 @@ try {
     if ($created) {
         Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    } elseif ($previousAction) {
+        Step "Upgrade health check failed; rolling back scheduled task to previous version."
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        try {
+            Set-ScheduledTask -TaskName $taskName -Action $previousAction | Out-Null
+            Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        } catch {}
     }
     throw
 }

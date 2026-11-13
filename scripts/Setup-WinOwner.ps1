@@ -14,6 +14,7 @@ param(
     [switch]$NoOpenGuide,
     [switch]$ReadOnly,
     [switch]$OwnerFullControl,
+    [switch]$Upgrade,
     [ValidateRange(1024, 65535)][int]$Port = 8768
 )
 Set-StrictMode -Version Latest
@@ -75,6 +76,7 @@ $arguments = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (
 if ($DryRun) { $arguments += "-DryRun" }
 if ($NoPythonInstall) { $arguments += "-NoPythonInstall" }
 if ($useFullControl) { $arguments += "-OwnerFullControl" }
+if ($Upgrade) { $arguments += "-Upgrade" }
 
 try {
     $child = Start-Process -FilePath $powershellExe -ArgumentList $arguments -WorkingDirectory $root -PassThru -Wait -NoNewWindow -ErrorAction Stop
@@ -86,7 +88,12 @@ try {
         exit 0
     }
     $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 5 -ErrorAction Stop
-    if ($health.status -ne "ok" -or $health.profile -ne $profile -or
+    $profileOk = if ($Upgrade -and -not $ReadOnly -and -not $OwnerFullControl) {
+        $health.profile -in @('read_only', 'owner_full_control')
+    } else {
+        $health.profile -eq $profile
+    }
+    if ($health.status -ne "ok" -or -not $profileOk -or
         $health.require_autonomous_auth -ne $true -or
         $health.allow_loopback_tunnel_identity -ne $false) {
         Stop-Setup "Local health/auth safety checks failed. Do not configure a tunnel." 5
