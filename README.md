@@ -1,45 +1,31 @@
 # WinOwner MCP — v1.1.0
 
-**Control your Windows computer from ChatGPT, with verified owner access.** An authenticated MCP tunnel connects ChatGPT to your private Windows machine.
+**Install a Windows MCP agent with one CMD command to connect it to ChatGPT.** The local installer defaults to Owner Full Control, effective only for an authenticated, authorized owner.
 
-[![CI](https://github.com/phuonghuster7/winowner-mcp/actions/workflows/ci-security.yml/badge.svg)](https://github.com/phuonghuster7/winowner-mcp/actions/workflows/ci-security.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)
-![Development version](https://img.shields.io/badge/development-v1.1.0-blue)
+## Check ChatGPT access first
 
-[Tiếng Việt](README.vi.md) · [Beginner's A–Z guide](docs/START_HERE.vi.md) · [Connect ChatGPT](docs/CONNECT_CHATGPT.md) · [Security](SECURITY.md) · [Releases](https://github.com/phuonghuster7/winowner-mcp/releases)
+Open **ChatGPT web → Plugins → + → Add custom MCP server**. Windows write/modify tools require a workspace that supports custom **full MCP** connections. According to [OpenAI's current documentation](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt), full MCP is available to **Business and Enterprise/Edu**, while Pro custom MCP connections are limited to read/fetch. If your account lacks the custom MCP option, the Windows component can still install but ChatGPT pairing cannot be completed through this guide.
 
-> **v1.1.0 is a development version, not an announced stable release.** The agent can modify files and interact with Windows using your account's permissions. Its permissions must be managed by the Windows owner.
+## Install locally with one CMD command
 
-## One CMD command for Windows beginners
-
-Open CMD, paste and press Enter:
+Open **Start → Command Prompt (cmd)**, paste and press Enter:
 
     powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
 
-Alternatively download the main source ZIP, extract it and double-click Install-WinOwner.cmd.
+WinOwner downloads to %LOCALAPPDATA%\WinOwnerMCP\v1.1.0, installs Python 3.12 if missing and winget is available, and creates a local startup task. No internal MCP token entry is required.
 
-The installer runs in one command window, creates a private Python 3.12 environment and schedules the local MCP adapter to run when you log into Windows. If Python is missing, it tries Windows Package Manager (winget). No Git, command-line knowledge or manual internal token entry is needed. The interactive double-click window stays open until its result is read. The result is saved as **WinOwner-SETUP-RESULT.txt** beside the installer, so beginners can review it after the window closes.
+**SUCCESS** confirms the *Windows installation*, **not ChatGPT account pairing**. For failures, read the error in CMD. Do not disable SmartScreen or Defender to work around warnings.
 
-**Default: Owner Full Control mode.** The local agent is configured for full control **only for an authenticated, authorized owner with a valid delegation**. It offers file and code editing, command execution, Git operations and desktop controls within the Windows account's rights. Unauthenticated users and non-owners cannot use those privileges. Optional restricted mode: run the setup script with -ReadOnly.
+## Check and stop the service
 
-## Connect ChatGPT the first time
+Press **Win + R**, paste %LOCALAPPDATA%\WinOwnerMCP\v1.1.0 and press Enter. Double-click **Check-WinOwner.cmd** to check the local service. **Uninstall-WinOwner.cmd** stops the agent and unregisters auto-start. Program files, settings and credentials remain; this is not a complete deletion of data.
 
-Windows installation and account pairing are separate:
-1. Obtain your own tunnel ID at [OpenAI Platform Tunnels](https://platform.openai.com/settings/organization/tunnels) and create a runtime key at [Platform API Keys](https://platform.openai.com/settings/organization/api-keys). The Platform organization must grant Tunnels Read + Use; creating a tunnel requires Read + Manage.
-2. Configure the official tunnel-client to point to the local address 127.0.0.1:8768/mcp, following [A–Z instructions](docs/START_HERE.vi.md).
-3. In ChatGPT Plugins choose **Add custom MCP server → Tunnel**, complete OAuth and test an actual tool call.
+## Connect ChatGPT
 
-**Required account authentication and ChatGPT permission confirmations cannot be silently bypassed.** The local installer generates its own secret without asking you to type it; a new ChatGPT connection still needs the account owner's authorization.
+The account owner must create/select a private Platform tunnel, keep tunnel-client running and authorize OAuth in ChatGPT. The local installer cannot grant these account permissions. See the [advanced guide](docs/ADVANCED_CHATGPT.vi.md).
 
-## Capabilities and current status
+**A real WinOwner tool call from ChatGPT is required for end-to-end acceptance.** Local service health alone is insufficient.
 
-- Owner-authenticated filesystem operations with hash checks, backup and audit
-- Git, coding tasks, shell commands, tests, Windows mouse and keyboard tools
-- Revocable owner grants, local-only service and Emergency Stop
+[Beginner guide](docs/START_HERE.vi.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Security](SECURITY.md) · [Tiếng Việt](README.vi.md)
 
-The previous release remains historical. The automated Windows installer, rollback and security gates have passed; first-time account pairing and permission steps remain separate.
-
-[Installation](docs/INSTALLATION.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
-
-MIT licensed; not endorsed by OpenAI or Microsoft.
+MIT licensed; independent of OpenAI and Microsoft.

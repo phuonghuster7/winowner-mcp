@@ -58,6 +58,31 @@ def test_beginner_entrypoint_and_release_inventory() -> None:
     assert "[REDACTED]" not in (ROOT / "docs" / "INSTALLATION.md").read_text(encoding="utf-8")
 
 
+def test_nontech_chatgpt_journey_is_honest_and_actionable() -> None:
+    vi = (ROOT / "README.vi.md").read_text(encoding="utf-8")
+    en = (ROOT / "README.md").read_text(encoding="utf-8")
+    quick = (ROOT / "docs" / "START_HERE.vi.md").read_text(encoding="utf-8")
+    expected = 'powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"'
+    for page in (vi, en, quick):
+        assert expected in page
+        assert "full MCP" in page
+        assert "Check-WinOwner.cmd" in page
+        assert "Uninstall-WinOwner.cmd" in page
+        assert "OAuth" in page
+        assert "WinOwner MCP" in page
+    assert "Business" in vi and "Enterprise/Edu" in en
+    assert "\u0054\u0048\u00c0\u004e\u0048 \u0043\u00d4\u004e\u0047" in quick
+    assert "\u0054\u0048\u1ea4\u0054 \u0042\u1ea0\u0049" in quick
+    assert "Win + R" in quick
+    assert "Uninstall-WinOwner.cmd" in quick
+    assert "%LOCALAPPDATA%" in quick
+    assert len(quick.encode("utf-8")) < 5000
+    assert not any(word in vi for word in ("Claude", "Gemini", "Cursor"))
+    assert "127.0.0.1:8765/mcp" not in (
+        ROOT / "docs" / "CONNECT_CHATGPT.md"
+    ).read_text(encoding="utf-8")
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows ZIP builder only")
 def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
     cmd = [
