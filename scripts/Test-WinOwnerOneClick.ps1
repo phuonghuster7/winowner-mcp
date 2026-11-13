@@ -23,7 +23,14 @@ try {
     $zip = Join-Path $root 'dist\winowner-mcp-v1.2.0.zip'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Build-ReleasePackage.ps1') -ProjectRoot $root -Version v1.2.0
     if ($LASTEXITCODE -ne 0) { throw 'Release builder failed in one-click test' }
-    Expand-Archive -LiteralPath $zip -DestinationPath $target -Force
+    # Use the same .NET ZIP implementation as the release builder:
+    # CI Windows PowerShell may lack the Archive auto-import cmdlets.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($zip,$target)
+    if(-not(Test-Path -LiteralPath $installer -PathType Leaf)){
+        $listing=@(Get-ChildItem -LiteralPath $target -Name -ErrorAction SilentlyContinue) -join ','
+        throw "Extracted Windows release missing Install-WinOwner.cmd (entries: $listing)"
+    }
     & $installer -NoPythonInstall -NoOpenGuide -OwnerFullControl -Port $Port
     if ($LASTEXITCODE -ne 0) { throw "One-click launcher exit: $LASTEXITCODE" }
     $h = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5

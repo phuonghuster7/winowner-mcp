@@ -21,7 +21,11 @@ $passed=$false
 try{
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Build-ReleasePackage.ps1') -ProjectRoot $root -Version v1.2.0
     if($LASTEXITCODE -ne 0){throw 'Failed to package isolated release'}
-    Expand-Archive -LiteralPath $zip -DestinationPath $legacy -Force
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($zip,$legacy)
+    if(-not(Test-Path -LiteralPath (Join-Path $legacy 'Install-WinOwner.cmd') -PathType Leaf)){
+        throw 'Extracted isolated legacy fixture lacks the installer'
+    }
     & (Join-Path $legacy 'Install-WinOwner.cmd') -NoPythonInstall -NoOpenGuide -Port $Port
     if($LASTEXITCODE -ne 0){throw 'Could not start simulated old local task'}
     $before=Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5
