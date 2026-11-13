@@ -1,34 +1,32 @@
-# WinOwner MCP — v1.1.0
+# WinOwner MCP — v1.1.1
 
-**Cài phần mềm điều khiển Windows qua ChatGPT bằng một dòng CMD.** Chế độ mặc định là Owner Full Control, chỉ có hiệu lực với chủ máy đã xác thực và có quyền hợp lệ.
+> **Yêu cầu tài khoản & gói cước (Đọc trước khi cài):** Để ChatGPT dùng đầy đủ công cụ MCP (ghi file, chạy lệnh, điều khiển màn hình), cần gói **ChatGPT Business, Enterprise hoặc Edu** có bật custom MCP ([tài liệu OpenAI](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)). Gói ChatGPT Pro chỉ hỗ trợ tìm kiếm/đọc (read/fetch). Khi kết nối cần thêm tài khoản **OpenAI Platform org** có quyền `Tunnels Read + Use`, `tunnel_id` và runtime API key.
 
-## Trước khi cài: kiểm tra quyền ChatGPT
+**Cài dịch vụ Windows MCP cục bộ (mặc định an toàn `read_only`) và kết nối với ChatGPT.** Không cần quyền Admin/UAC; mọi cổng chỉ mở nội bộ tại `127.0.0.1:8768`.
 
-Trên ChatGPT web, mở **Plugins → + → Add custom MCP server**. Để ChatGPT ghi/sửa file hay điều khiển Windows, workspace cần hỗ trợ **full MCP** và cho phép tạo kết nối tùy chỉnh. Theo tài liệu OpenAI hiện tại, full MCP dành cho **Business, Enterprise/Edu**; Pro chỉ dùng custom MCP với quyền read/fetch. Không thấy mục này thì phần cài Windows vẫn làm được, nhưng chưa thể hoàn tất kết nối ChatGPT bằng quy trình repo. Xem [tài liệu OpenAI](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
+## 1. Cài đặt bằng một lệnh CMD trên Windows 10/11
 
-## 1. Một lệnh CMD trên Windows 10/11
+Nhấn **Start**, gõ **cmd**, mở **Command Prompt**, dán lệnh sau rồi nhấn Enter:
 
-Nhấn **Start**, tìm **cmd**, mở **Command Prompt**, dán rồi nhấn Enter:
+```cmd
+powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/releases/download/v1.1.1/go.ps1|iex"
+```
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
+Bộ cài tự xác minh mã SHA-256 của gói phát hành `v1.1.1`, cài vào `%LOCALAPPDATA%\WinOwnerMCP\v1.1.1`, cài Python 3.12 (qua `winget` nếu thiếu), tạo khóa chủ máy `owner_admin.key` và đăng ký tác vụ chạy ẩn (`pythonw.exe`) khi đăng nhập.
 
-Bộ cài tự tải về %LOCALAPPDATA%\WinOwnerMCP\v1.1.0, cài Python 3.12 nếu cần và có winget, tạo dịch vụ MCP tự chạy khi đăng nhập. **Không nhập token nội bộ**.
+**THÀNH CÔNG** nghĩa là phần mềm cục bộ trên Windows đã chạy, **không đồng nghĩa ChatGPT đã kết nối**. Không tắt SmartScreen hay Windows Defender.
 
-**THÀNH CÔNG** nghĩa là cài Windows xong, **không đồng nghĩa ChatGPT đã kết nối**. Nếu **THẤT BẠI**, đọc thông báo trong CMD; không tắt SmartScreen hoặc Defender để né cảnh báo.
+## 2. Kết nối ChatGPT & quản lý quyền (nhấp đúp)
 
-## 2. Kiểm tra hoặc gỡ dịch vụ
+Nhấn **Win + R**, dán `%LOCALAPPDATA%\WinOwnerMCP\v1.1.1` rồi Enter:
 
-Nhấn **Win + R**, dán đường dẫn này rồi Enter:
+- **Connect-ChatGPT.cmd**: Trình hướng dẫn tiếng Việt nhập `tunnel_id` và API key (mã hóa DPAPI, ẩn khi nhập), kiểm tra `tunnel-client.exe`, tạo tác vụ tunnel chạy ẩn, sao chép Owner Key qua **Show-OwnerKey.cmd** (tự xóa clipboard sau 60 giây) và mở trang ChatGPT Connectors.
+- **Show-OwnerKey.cmd**: Chép `owner_admin.key` vào clipboard (không in ra màn hình) để dán vào trang xác nhận ChatGPT.
+- **Grant-Access.cmd / Revoke-Access.cmd**: Cấp hoặc thu hồi quyền có thời hạn (tối đa 24 giờ) cho từng thư mục cụ thể.
+- **Enable-FullControl.cmd / Disable-FullControl.cmd**: Bật/tắt chế độ toàn quyền (`owner_full_control` / `read_only`).
+- **Check-WinOwner.cmd / Uninstall-WinOwner.cmd**: Kiểm tra sức khỏe dịch vụ hoặc dừng và gỡ tác vụ tự khởi động (giữ nguyên dữ liệu và khóa riêng).
 
-    %LOCALAPPDATA%\WinOwnerMCP\v1.1.0
-
-Nhấp đúp **Check-WinOwner.cmd** để kiểm tra dịch vụ và truy cập chưa xác thực. Nhấp đúp **Uninstall-WinOwner.cmd** để dừng dịch vụ, gỡ tác vụ tự khởi động. **Tệp chương trình, cấu hình và khóa riêng vẫn được giữ lại**, chưa phải xóa sạch dữ liệu khỏi máy.
-
-## 3. Liên kết ChatGPT
-
-Người có quyền lần đầu tạo/chọn tunnel trên OpenAI Platform, chạy tunnel-client rồi xác nhận OAuth trong ChatGPT. Không thể cấp quyền tài khoản thay người dùng bằng CMD. [Hướng dẫn dành cho người quản trị](docs/ADVANCED_CHATGPT.vi.md).
-
-**Chỉ coi là đã kết nối khi ChatGPT gọi được một công cụ WinOwner thật.** Đừng dựa vào thông báo cài Windows hoặc cổng đang mở.
+**Chỉ coi là đã kết nối khi bạn gọi thử thành công một công cụ WinOwner thật từ ChatGPT.**
 
 [Hướng dẫn người mới](docs/START_HERE.vi.md) · [Khắc phục lỗi](docs/TROUBLESHOOTING.md) · [Bảo mật](SECURITY.md) · [English](README.md)
 

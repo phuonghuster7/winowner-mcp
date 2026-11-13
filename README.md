@@ -1,31 +1,35 @@
-# WinOwner MCP — v1.1.0
+# WinOwner MCP — v1.1.1
 
-**Install a Windows MCP agent with one CMD command to connect it to ChatGPT.** The local installer defaults to Owner Full Control, effective only for an authenticated, authorized owner.
+> **Account & Plan Requirements (Read First):** Full MCP (including Windows file write, commands, and desktop control) requires **ChatGPT Business, Enterprise, or Edu** with custom MCP enabled ([OpenAI docs](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)). ChatGPT Pro custom MCP connections are limited to read/fetch. Connecting ChatGPT also requires an **OpenAI Platform org** with `Tunnels Read + Use`, a runtime API key, and a `tunnel_id`.
 
-## Check ChatGPT access first
+**Install a local Windows MCP agent (`read_only` by default) and pair it with ChatGPT.** Local install requires no Administrator/UAC prompt and binds strictly to `127.0.0.1:8768`.
 
-Open **ChatGPT web → Plugins → + → Add custom MCP server**. Windows write/modify tools require a workspace that supports custom **full MCP** connections. According to [OpenAI's current documentation](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt), full MCP is available to **Business and Enterprise/Edu**, while Pro custom MCP connections are limited to read/fetch. If your account lacks the custom MCP option, the Windows component can still install but ChatGPT pairing cannot be completed through this guide.
-
-## Install locally with one CMD command
+## 1. Install locally with one CMD command
 
 Open **Start → Command Prompt (cmd)**, paste and press Enter:
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
+```cmd
+powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/releases/download/v1.1.1/go.ps1|iex"
+```
 
-WinOwner downloads to %LOCALAPPDATA%\WinOwnerMCP\v1.1.0, installs Python 3.12 if missing and winget is available, and creates a local startup task. No internal MCP token entry is required.
+*(To test an unpinned branch such as `main`, set `WINOWNER_REF=main` and `WINOWNER_ALLOW_UNPINNED=1` first.)*
 
-**SUCCESS** confirms the *Windows installation*, **not ChatGPT account pairing**. For failures, read the error in CMD. Do not disable SmartScreen or Defender to work around warnings.
+WinOwner installs to `%LOCALAPPDATA%\WinOwnerMCP\v1.1.1`, downloads Python 3.12 if missing (via `winget`), generates restricted owner credentials (`gateway_caller.token` and `owner_admin.key`), and registers a hidden per-user logon task (`pythonw.exe`).
 
-## Check and stop the service
+**SUCCESS** confirms the *local Windows installation*, **not ChatGPT pairing**. Do not disable SmartScreen or Windows Defender.
 
-Press **Win + R**, paste %LOCALAPPDATA%\WinOwnerMCP\v1.1.0 and press Enter. Double-click **Check-WinOwner.cmd** to check the local service. **Uninstall-WinOwner.cmd** stops the agent and unregisters auto-start. Program files, settings and credentials remain; this is not a complete deletion of data.
+## 2. Connect ChatGPT & manage access (double-click launchers)
 
-## Connect ChatGPT
+Press **Win + R**, open `%LOCALAPPDATA%\WinOwnerMCP\v1.1.1`:
 
-The account owner must create/select a private Platform tunnel, keep tunnel-client running and authorize OAuth in ChatGPT. The local installer cannot grant these account permissions. See the [advanced guide](docs/ADVANCED_CHATGPT.vi.md).
+- **Connect-ChatGPT.cmd**: Interactive wizard to store your runtime API key with CurrentUser DPAPI, verify `tunnel-client.exe`, register a hidden tunnel logon task, copy your Owner Key via **Show-OwnerKey.cmd** (clears clipboard after 60s), and open ChatGPT Connectors.
+- **Show-OwnerKey.cmd**: Copies `runtime\secrets\owner_admin.key` to clipboard without printing it.
+- **Grant-Access.cmd / Revoke-Access.cmd**: Grant or revoke time-bounded folder permissions (`read`, `write`, `commands`, `desktop`).
+- **Enable-FullControl.cmd / Disable-FullControl.cmd**: Explicitly switch between safe `read_only` and `owner_full_control`.
+- **Check-WinOwner.cmd / Uninstall-WinOwner.cmd**: Verify health/auth/ACLs or stop and unregister the local service (preserves user settings and secrets).
 
-**A real WinOwner tool call from ChatGPT is required for end-to-end acceptance.** Local service health alone is insufficient.
+**A real WinOwner tool call from ChatGPT is required for end-to-end acceptance.**
 
-[Beginner guide](docs/START_HERE.vi.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Security](SECURITY.md) · [Tiếng Việt](README.vi.md)
+[Vietnamese guide](docs/START_HERE.vi.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Security](SECURITY.md) · [Tiếng Việt](README.vi.md)
 
 MIT licensed; independent of OpenAI and Microsoft.

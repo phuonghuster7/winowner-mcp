@@ -13,7 +13,7 @@ SKIP = {".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache"}
 REQUIRED = [
     "README.md", "LICENSE", "SECURITY.md", "CONTRIBUTING.md",
     "requirements.txt", "requirements-dev.txt", "pytest.ini",
-    "docs/INSTALLATION.md", "docs/PUBLIC_RELEASE_CHECKLIST.md",
+    "docs/INSTALLATION.md", "docs/maintainers/PUBLIC_RELEASE_CHECKLIST.md",
     "docs/START_HERE.vi.md", "docs/ADVANCED_CHATGPT.vi.md",
     "go.ps1", "Install-WinOwner.cmd", "Check-WinOwner.cmd", "Uninstall-WinOwner.cmd",
     "scripts/Check-WinOwner.ps1", "scripts/Setup-WinOwner.ps1",

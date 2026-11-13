@@ -2,7 +2,7 @@
 
 ## Supported status
 
-The active source candidate is **v1.0.0-rc3**. This release candidate is not a public security certification; no promise is made to maintain older internal versions.
+The active source release is **v1.1.1**. This release is not a public security certification; no promise is made to maintain older internal versions.
 
 ## Private vulnerability disclosure
 
@@ -12,7 +12,7 @@ Do not disclose attack details, credentials or identifiable logs in public GitHu
 
 - Bind MCP/backend/console ports to **127.0.0.1** and expose them only through explicitly configured authenticated channels.
 - Verify OAuth owner identity and operation-level scopes; a client name alone is not authorization.
-- Default to read_only and use bounded capability grants, durable revocation and least privilege.
+- Default to `read_only` (requiring explicit phrase confirmation via `Enable-FullControl.cmd` to switch to `owner_full_control`) and use bounded capability grants (`Grant-Access.cmd`), durable revocation (`Revoke-Access.cmd`) and least privilege.
 - **OWNER_GLOBAL_FILESYSTEM** is highly privileged, opt-in, owner-only, logged and revocable; it does not grant administrator rights or bypass NTFS/UAC.
 - Keep source-control histories and release artifacts free of credentials, signed grants, machine-local tunnel config, personal paths and runtime state.
 - Treat tool execution and third-party code as workstation code execution, not isolated execution.
