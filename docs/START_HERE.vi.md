@@ -2,7 +2,7 @@
 
 ## Trước khi bắt đầu — Kiểm tra điều kiện tài khoản
 
-1. **Gói ChatGPT:** Cần **ChatGPT Business / Enterprise / Edu** bật custom MCP để dùng đầy đủ công cụ ghi file, chạy lệnh, điều khiển màn hình. Gói **Pro** chỉ hỗ trợ tìm kiếm/đọc (read/fetch).
+1. **Gói ChatGPT:** Cần **ChatGPT Business / Enterprise / Edu** bật custom MCP để dùng đầy đủ công cụ (full MCP: ghi file, chạy lệnh, điều khiển màn hình). Gói **Pro** chỉ hỗ trợ tìm kiếm/đọc (read/fetch).
 2. **OpenAI Platform:** Tài khoản org có quyền `Tunnels Read + Use`, đã tạo `tunnel_id` và một `runtime API key` (`sk-...`).
 
 ---

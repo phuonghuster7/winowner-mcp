@@ -6,13 +6,14 @@
 [CmdletBinding()]
 param(
     [ValidateRange(0, 600)][int]$ClearAfterSeconds = 60,
+    [string]$KeyPath = "",
     [switch]$NoWait
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$ownerKeyPath = Join-Path $root "runtime\secrets\owner_admin.key"
+$ownerKeyPath = if ($KeyPath) { $KeyPath } else { Join-Path $root "runtime\secrets\owner_admin.key" }
 
 if (-not (Test-Path -LiteralPath $ownerKeyPath -PathType Leaf)) {
     Write-Host "[THẤT BẠI] Chưa tìm thấy khóa chủ máy (runtime\secrets\owner_admin.key). Hãy chạy Install-WinOwner.cmd trước." -ForegroundColor Red
@@ -39,3 +40,4 @@ if (-not $NoWait -and $ClearAfterSeconds -gt 0) {
     Write-Host "Đã xóa khóa khỏi bộ nhớ tạm." -ForegroundColor Cyan
 }
 exit 0
+

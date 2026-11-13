@@ -1,6 +1,6 @@
 # WinOwner MCP — v1.1.1
 
-> **Yêu cầu tài khoản & gói cước (Đọc trước khi cài):** Để ChatGPT dùng đầy đủ công cụ MCP (ghi file, chạy lệnh, điều khiển màn hình), cần gói **ChatGPT Business, Enterprise hoặc Edu** có bật custom MCP ([tài liệu OpenAI](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)). Gói ChatGPT Pro chỉ hỗ trợ tìm kiếm/đọc (read/fetch). Khi kết nối cần thêm tài khoản **OpenAI Platform org** có quyền `Tunnels Read + Use`, `tunnel_id` và runtime API key.
+> **Yêu cầu tài khoản & gói cước (Đọc trước khi cài):** Để ChatGPT dùng đầy đủ công cụ MCP (full MCP — ghi file, chạy lệnh, điều khiển màn hình), cần gói **ChatGPT Business, Enterprise hoặc Edu** có bật custom MCP ([tài liệu OpenAI](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt)). Gói ChatGPT Pro chỉ hỗ trợ tìm kiếm/đọc (read/fetch). Khi kết nối cần thêm tài khoản **OpenAI Platform org** có quyền `Tunnels Read + Use`, `tunnel_id` và runtime API key.
 
 **Cài dịch vụ Windows MCP cục bộ (mặc định an toàn `read_only`) và kết nối với ChatGPT.** Không cần quyền Admin/UAC; mọi cổng chỉ mở nội bộ tại `127.0.0.1:8768`.
 
@@ -20,7 +20,7 @@ Bộ cài tự xác minh mã SHA-256 của gói phát hành `v1.1.1`, cài vào 
 
 Nhấn **Win + R**, dán `%LOCALAPPDATA%\WinOwnerMCP\v1.1.1` rồi Enter:
 
-- **Connect-ChatGPT.cmd**: Trình hướng dẫn tiếng Việt nhập `tunnel_id` và API key (mã hóa DPAPI, ẩn khi nhập), kiểm tra `tunnel-client.exe`, tạo tác vụ tunnel chạy ẩn, sao chép Owner Key qua **Show-OwnerKey.cmd** (tự xóa clipboard sau 60 giây) và mở trang ChatGPT Connectors.
+- **Connect-ChatGPT.cmd**: Trình hướng dẫn tiếng Việt nhập `tunnel_id` và API key (mã hóa DPAPI, ẩn khi nhập), kiểm tra `tunnel-client.exe`, tạo tác vụ tunnel chạy ẩn, sao chép Owner Key qua **Show-OwnerKey.cmd** (tự xóa clipboard sau 60 giây) và mở trang xác nhận OAuth trên ChatGPT Connectors.
 - **Show-OwnerKey.cmd**: Chép `owner_admin.key` vào clipboard (không in ra màn hình) để dán vào trang xác nhận ChatGPT.
 - **Grant-Access.cmd / Revoke-Access.cmd**: Cấp hoặc thu hồi quyền có thời hạn (tối đa 24 giờ) cho từng thư mục cụ thể.
 - **Enable-FullControl.cmd / Disable-FullControl.cmd**: Bật/tắt chế độ toàn quyền (`owner_full_control` / `read_only`).

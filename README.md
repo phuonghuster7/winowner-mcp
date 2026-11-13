@@ -22,7 +22,7 @@ WinOwner installs to `%LOCALAPPDATA%\WinOwnerMCP\v1.1.1`, downloads Python 3.12 
 
 Press **Win + R**, open `%LOCALAPPDATA%\WinOwnerMCP\v1.1.1`:
 
-- **Connect-ChatGPT.cmd**: Interactive wizard to store your runtime API key with CurrentUser DPAPI, verify `tunnel-client.exe`, register a hidden tunnel logon task, copy your Owner Key via **Show-OwnerKey.cmd** (clears clipboard after 60s), and open ChatGPT Connectors.
+- **Connect-ChatGPT.cmd**: Interactive wizard to store your runtime API key with CurrentUser DPAPI, verify `tunnel-client.exe`, register a hidden tunnel logon task, copy your Owner Key via **Show-OwnerKey.cmd** (clears clipboard after 60s), and open ChatGPT Connectors for OAuth approval.
 - **Show-OwnerKey.cmd**: Copies `runtime\secrets\owner_admin.key` to clipboard without printing it.
 - **Grant-Access.cmd / Revoke-Access.cmd**: Grant or revoke time-bounded folder permissions (`read`, `write`, `commands`, `desktop`).
 - **Enable-FullControl.cmd / Disable-FullControl.cmd**: Explicitly switch between safe `read_only` and `owner_full_control`.
