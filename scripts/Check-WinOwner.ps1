@@ -22,7 +22,18 @@ try {
             throw "Unauthenticated tool discovery did not return HTTP 401."
         }
     }
-    Write-Host "CHECK_PASS: local MCP is running, profile=$($health.profile), anonymous access blocked." -ForegroundColor Green
+    $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+    foreach ($secName in @("gateway_caller.token", "owner_admin.key")) {
+        $secPath = Join-Path $root ("runtime\secrets\" + $secName)
+        if (-not (Test-Path -LiteralPath $secPath -PathType Leaf)) {
+            throw "Required secret file missing: runtime\secrets\$secName"
+        }
+        $aclOut = (& icacls.exe $secPath 2>&1) -join "`n"
+        if ($LASTEXITCODE -ne 0 -or $aclOut -match '(?i)(Everyone|BUILTIN\\Users|NT AUTHORITY\\Authenticated Users)') {
+            throw "Secret file ACL check failed for runtime\secrets\$secName"
+        }
+    }
+    Write-Host "CHECK_PASS: local MCP is running, profile=$($health.profile), secret ACLs verified, anonymous access blocked." -ForegroundColor Green
     Write-Host "This check does NOT verify that ChatGPT account pairing is complete."
     exit 0
 } catch {

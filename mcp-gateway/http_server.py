@@ -2226,12 +2226,12 @@ def _render_consent_html(
 </head>
 <body>
     <div class="card">
-        <h2>Authorize Autonomous Agent Access</h2>
+        <h2>Xác nhận quyền truy cập cho Trợ lý (Authorize Autonomous Agent Access)</h2>
         <div class="info">
-            <p><strong>Client ID:</strong> {escaped_client}</p>
-            <p><strong>Requested Scope:</strong> {escaped_scope}</p>
-            <p><strong>Target Resource:</strong> {escaped_resource}</p>
-            <p><strong>Redirect URI:</strong> {escaped_redirect}</p>
+            <p><strong>Ứng dụng (Client ID):</strong> {escaped_client}</p>
+            <p><strong>Quyền yêu cầu (Requested Scope):</strong> {escaped_scope}</p>
+            <p><strong>Tài nguyên mục tiêu (Target Resource):</strong> {escaped_resource}</p>
+            <p><strong>Địa chỉ chuyển hướng (Redirect URI):</strong> {escaped_redirect}</p>
         </div>
         <form method="POST" action="/oauth/authorize">
             <input type="hidden" name="csrf_token" value="{escaped_csrf}" />
@@ -2242,11 +2242,11 @@ def _render_consent_html(
             <input type="hidden" name="code_challenge" value="{escaped_challenge}" />
             <input type="hidden" name="code_challenge_method" value="{escaped_method}" />
             <input type="hidden" name="state" value="{escaped_state}" />
-            <label for="owner_token">Owner Passphrase / Token:</label>
-            <input type="password" id="owner_token" name="owner_token" required placeholder="Enter owner token" />
+            <label for="owner_token">Mã khóa chủ máy (Owner Passphrase / Token):</label>
+            <input type="password" id="owner_token" name="owner_token" required placeholder="Dán mã chủ máy (Enter owner token)" />
             <div class="actions">
-                <button type="submit" name="decision" value="allow" class="btn-allow">Approve & Grant</button>
-                <button type="submit" name="decision" value="deny" class="btn-deny">Deny</button>
+                <button type="submit" name="decision" value="allow" class="btn-allow">Đồng ý &amp; Cấp quyền (Approve &amp; Grant)</button>
+                <button type="submit" name="decision" value="deny" class="btn-deny">Từ chối (Deny)</button>
             </div>
         </form>
     </div>

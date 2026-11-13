@@ -24,6 +24,7 @@ $policyExample = Join-Path $root "config\policy.example.json"
 $policyPath = Join-Path $root "config\policy.json"
 $secretDir = Join-Path $root "runtime\secrets"
 $tokenPath = Join-Path $secretDir "gateway_caller.token"
+$ownerKeyPath = Join-Path $secretDir "owner_admin.key"
 $logDir = Join-Path $root "runtime\logs"
 $taskName = "WinOwnerMCP-$Port"
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -184,6 +185,25 @@ if (-not (Test-Path -LiteralPath $tokenPath)) {
 }
 & icacls.exe $tokenPath /inheritance:r /grant:r "$($identity):(F)" "SYSTEM:(F)" | Out-Null
 Check-Exit "private token ACL"
+if (-not (Test-Path -LiteralPath $ownerKeyPath)) {
+    $obytes = New-Object byte[] 36
+    $orng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $orng.GetBytes($obytes) } finally { $orng.Dispose() }
+    $b64url = [Convert]::ToBase64String($obytes).Replace('+', '-').Replace('/', '_').TrimEnd('=')
+    [Array]::Clear($obytes, 0, $obytes.Length)
+    [IO.File]::WriteAllText($ownerKeyPath, ("mcp_oadm_" + $b64url + "`n"), [Text.UTF8Encoding]::new($false))
+}
+& icacls.exe $ownerKeyPath /inheritance:r /grant:r "$($identity):(F)" "SYSTEM:(F)" | Out-Null
+Check-Exit "owner admin key ACL"
+function Assert-RestrictedAcl([string]$targetPath) {
+    $aclOut = (& icacls.exe $targetPath 2>&1) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "icacls check failed for $targetPath" }
+    if ($aclOut -match '(?i)(Everyone|BUILTIN\\Users|NT AUTHORITY\\Authenticated Users)') {
+        throw "Unsafe ACL detected on $targetPath"
+    }
+}
+Assert-RestrictedAcl $tokenPath
+Assert-RestrictedAcl $ownerKeyPath
 if ($NoStart) { Step "LOCAL_PREPARED: no task started or registered"; exit 0 }
 $created = $false
 $arguments = ('-u "{0}" --port {1} --profile {2}' -f $runner, $Port, $profile)
