@@ -17,6 +17,12 @@ $taskName="WinOwnerMCP-$Port"
 if(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue){throw "Cannot test occupied task $taskName"}
 if(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue){throw 'Cannot test occupied port'}
 New-Item -ItemType Directory -Path $legacy -Force | Out-Null
+# The runner's TEMP path can be an 8.3 alias (RUNNER~1).
+# Compare task action paths only after resolving the existing test root.
+$canonicalBase=(Get-Item -LiteralPath $base).FullName
+$base=$canonicalBase
+$legacy=Join-Path $base 'v1.1.0'
+$current=Join-Path $base 'v1.2.0'
 $passed=$false
 try{
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Build-ReleasePackage.ps1') -ProjectRoot $root -Version v1.2.0
