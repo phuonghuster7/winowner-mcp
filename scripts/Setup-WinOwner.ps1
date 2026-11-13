@@ -13,6 +13,7 @@ param(
     [switch]$NoPythonInstall,
     [switch]$NoOpenGuide,
     [switch]$ReadOnly,
+    [switch]$OwnerFullControl,
     [ValidateRange(1024, 65535)][int]$Port = 8768
 )
 Set-StrictMode -Version Latest
@@ -27,7 +28,7 @@ function Write-SetupResult([string]$state, [string]$mode) {
     # No secrets or OAuth values are written to this human-readable summary.
     $resultPath = Join-Path $root "WinOwner-SETUP-RESULT.txt"
     $lines = @(
-        "WinOwner MCP v1.1.0",
+        "WinOwner MCP v1.1.1",
         "Windows install status: $state",
         "Local profile: $mode",
         "ChatGPT connected: NOT YET (owner OAuth required)",
@@ -57,19 +58,23 @@ if (-not (Test-Path -LiteralPath $powershellExe -PathType Leaf)) {
     Stop-Setup "Windows PowerShell executable was not found." 2
 }
 
+if ($ReadOnly -and $OwnerFullControl) {
+    Stop-Setup "Cannot pass both -ReadOnly and -OwnerFullControl." 2
+}
+$useFullControl = [bool]$OwnerFullControl
 Write-Host "==========================================================="
 Write-Host " WinOwner MCP - LOCAL setup"
-$profile = if ($ReadOnly) { 'read_only' } else { 'owner_full_control' }
-Write-Host " Mode: $(if ($DryRun) { 'CHECK ONLY' } else { 'OWNER FULL CONTROL' }) | Port: $Port"
+$profile = if ($useFullControl) { 'owner_full_control' } else { 'read_only' }
+Write-Host " Mode: $(if ($DryRun) { 'CHECK ONLY' } elseif ($useFullControl) { 'OWNER FULL CONTROL' } else { 'READ ONLY (SAFE DEFAULT)' }) | Port: $Port"
 Write-Host "==========================================================="
-Write-Host "Full control is enabled for a verified, authorized owner only."
+Write-Host "Default profile is read_only (safe mode). Use Enable-FullControl.cmd to grant write/run/desktop access."
 Write-Host "Unauthenticated/non-owner clients remain blocked; ChatGPT OAuth pairing is required."
 Write-Host "It uses the current Windows account; no Administrator prompt is required."
 Write-Host ""
 $arguments = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"{0}"' -f $bootstrap), "-Port", "$Port")
 if ($DryRun) { $arguments += "-DryRun" }
 if ($NoPythonInstall) { $arguments += "-NoPythonInstall" }
-if (-not $ReadOnly) { $arguments += "-OwnerFullControl" }
+if ($useFullControl) { $arguments += "-OwnerFullControl" }
 
 try {
     $child = Start-Process -FilePath $powershellExe -ArgumentList $arguments -WorkingDirectory $root -PassThru -Wait -NoNewWindow -ErrorAction Stop
@@ -94,7 +99,7 @@ try {
     if ($report.status -ne "LOCAL_INSTALL_PASS" -or $report.remote_oauth_paired -ne $false -or
         $report.profile -ne $profile -or
         $report.full_control_requires_verified_owner -ne $true -or
-        $report.owner_global_filesystem_enabled -ne (-not $ReadOnly)) {
+        $report.owner_global_filesystem_enabled -ne $useFullControl) {
         Stop-Setup "Unexpected bootstrap report. Review the local configuration." 5
     }
     Write-Host ""

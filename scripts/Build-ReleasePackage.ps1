@@ -43,7 +43,7 @@ $candidateFiles = New-Object System.Collections.Generic.List[string]
 
 # Root files (.md, LICENSE, .gitignore, .gitattributes)
 Get-ChildItem -Path $ProjectRoot -File | Where-Object {
-    $_.Name -in @("LICENSE", ".gitignore", ".gitattributes", "requirements.txt", "requirements-dev.txt", "pytest.ini", "Install-WinOwner.cmd", "Check-WinOwner.cmd", "Uninstall-WinOwner.cmd", "go.ps1") -or $_.Extension -eq ".md"
+    $_.Name -in @("LICENSE", ".gitignore", ".gitattributes", "requirements.txt", "requirements-dev.txt", "pytest.ini", "go.ps1") -or $_.Extension -in @(".md", ".cmd")
 } | ForEach-Object {
     $candidateFiles.Add($_.FullName.Substring($ProjectRoot.Length).TrimStart('\'))
 }

@@ -37,7 +37,7 @@ $tempDir = ''
 Write-Host ''
 Write-Host "==== $display - ONLINE SETUP ====" -ForegroundColor Cyan
 Write-Host "Install folder: $InstallRoot"
-Write-Host 'The local installer uses Owner Full Control ONLY for a verified owner.'
+Write-Host 'The local installer defaults to safe read_only mode. Run Enable-FullControl.cmd if needed.'
 Write-Host 'ChatGPT OAuth and tunnel account authorization are required separately.'
 if ($DryRun) {
     Write-Host "DRY_RUN_PASS: download=$archiveUrl"

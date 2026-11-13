@@ -24,9 +24,9 @@ try {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'go.ps1') -ArchivePath $zip -InstallRoot $target -Port $Port -NoPythonInstall
     if ($LASTEXITCODE -ne 0) { throw "One-command full local install failed." }
     $health = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5
-    if ($health.profile -ne 'owner_full_control' -or $health.require_autonomous_auth -ne $true -or
+    if ($health.profile -ne 'read_only' -or $health.require_autonomous_auth -ne $true -or
         $health.allow_loopback_tunnel_identity -ne $false) {
-        throw "Owner profile / authentication checks failed."
+        throw "Safe default read_only / authentication checks failed."
     }
     & (Join-Path $target 'Check-WinOwner.cmd') -Port $Port
     if ($LASTEXITCODE -ne 0) { throw "Check-WinOwner.cmd failed." }

@@ -10,6 +10,7 @@ param(
     [switch]$NoStart,
     [switch]$NoPythonInstall,
     [switch]$OwnerFullControl,
+    [switch]$SwitchProfile,
     [switch]$Remove,
     [ValidateRange(1024,65535)][int]$Port = 8768
 )
@@ -61,12 +62,12 @@ function Managed-Task {
             @($identity, $env:USERNAME, ("$env:USERDOMAIN\$env:USERNAME")) -notcontains $t.Principal.UserId) {
             throw "Task name collision for $taskName; refusing to modify another task."
         }
-        # Refuse silently changing the profile of an existing task.
+        # Refuse silently changing the profile of an existing task unless -SwitchProfile is explicitly set.
         # Allow -Remove to cleanly remove either verified mode.
-        if (-not $Remove) {
+        if (-not $Remove -and -not $SwitchProfile) {
             $taskIsFull = $a[0].Arguments -match '(?i)(?:^|\s)--profile\s+owner_full_control(?:\s|$)'
             if ($taskIsFull -ne [bool]$OwnerFullControl) {
-                throw "Existing WinOwner task uses a different profile; use another port or explicitly remove the task."
+                throw "Existing WinOwner task uses a different profile; use -SwitchProfile or explicitly remove the task."
             }
         }
     }
@@ -132,9 +133,21 @@ if ($DryRun) {
     if (-not $py -and $NoPythonInstall) { throw "Python 3.12 unavailable" }
     exit 0
 }
-if ($task -and (Healthy-And-Authenticated)) {
+if ($task -and -not $SwitchProfile -and (Healthy-And-Authenticated)) {
     Step "LOCAL_INSTALL_PASS: existing managed task is healthy; no changes made."
     exit 0
+}
+if ($task -and $SwitchProfile) {
+    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    $deadline = [DateTime]::UtcNow.AddSeconds(12)
+    while ((-not (Port-IsFree)) -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 300
+    }
+    if (-not (Port-IsFree)) {
+        Stop-VerifiedLocalListener
+        Start-Sleep -Milliseconds 400
+    }
+    $free = Port-IsFree
 }
 if (-not $free) { throw "Port $Port occupied by an unverified process; no changes made." }
 $py = Find-Python
@@ -173,14 +186,16 @@ if (-not (Test-Path -LiteralPath $tokenPath)) {
 Check-Exit "private token ACL"
 if ($NoStart) { Step "LOCAL_PREPARED: no task started or registered"; exit 0 }
 $created = $false
+$arguments = ('-u "{0}" --port {1} --profile {2}' -f $runner, $Port, $profile)
+$action = New-ScheduledTaskAction -Execute $venv -Argument $arguments -WorkingDirectory $root
 if (-not $task) {
-    $arguments = ('-u "{0}" --port {1} --profile {2}' -f $runner, $Port, $profile)
-    $action = New-ScheduledTaskAction -Execute $venv -Argument $arguments -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
     $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "WinOwner MCP read-only local adapter, current-user logon" | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "WinOwner MCP $profile local adapter, current-user logon" | Out-Null
     $created = $true
+} elseif ($SwitchProfile) {
+    Set-ScheduledTask -TaskName $taskName -Action $action | Out-Null
 }
 try {
     Start-ScheduledTask -TaskName $taskName -ErrorAction Stop

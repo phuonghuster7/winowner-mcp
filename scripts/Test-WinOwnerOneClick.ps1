@@ -22,7 +22,7 @@ try {
     & $installer -NoPythonInstall -NoOpenGuide -Port $Port
     if ($LASTEXITCODE -ne 0) { throw "One-click launcher exit: $LASTEXITCODE" }
     $h = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5
-    if ($h.status -ne "ok" -or $h.profile -ne "owner_full_control" -or
+    if ($h.status -ne "ok" -or $h.profile -ne "read_only" -or
         $h.require_autonomous_auth -ne $true -or $h.allow_loopback_tunnel_identity -ne $false) {
         throw "Unexpected profile or auth boundary."
     }
@@ -31,15 +31,15 @@ try {
         throw "Beginner-friendly setup status file is missing."
     }
     $resultText = Get-Content -LiteralPath $resultPath -Raw
-    if ($resultText -notmatch "LOCAL_INSTALL_PASS" -or $resultText -notmatch "owner_full_control") {
-        throw "Setup result file did not confirm the authenticated owner profile."
+    if ($resultText -notmatch "LOCAL_INSTALL_PASS" -or $resultText -notmatch "read_only") {
+        throw "Setup result file did not confirm the safe read_only profile."
     }
     $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
     if ($task.State -ne "Running") { throw "Owner MCP task was not running." }
     $report = Get-Content (Join-Path $root "runtime\logs\bootstrap-report.json") -Raw | ConvertFrom-Json
-    if ($report.profile -ne "owner_full_control" -or $report.owner_global_filesystem_enabled -ne $true -or
+    if ($report.profile -ne "read_only" -or $report.owner_global_filesystem_enabled -ne $false -or
         $report.full_control_requires_verified_owner -ne $true -or $report.remote_oauth_paired -ne $false) {
-        throw "Owner-mode report did not match the expected authorization state."
+        throw "Safe read_only report did not match the expected authorization state."
     }
     try {
         $body = '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
