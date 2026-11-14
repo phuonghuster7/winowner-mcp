@@ -359,13 +359,17 @@ def test_beginner_frontend_dry_run_does_not_install() -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell and local HTTP server only")
-def test_exact_irm_pipe_iex_entrypoint_without_install() -> None:
+def test_exact_irm_pipe_iex_entrypoint_without_install(tmp_path: Path) -> None:
     # Exercise the actual one-line web installation route using a local HTTP
     # server and an explicit dry-run environment flag. Never touch production.
     source = (ROOT / "go.ps1").read_bytes()
+    requests: list[str] = []
+    fake_appdata = tmp_path / "LocalAppData"
+    fake_appdata.mkdir()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            requests.append(self.path)
             if self.path != "/go.ps1":
                 self.send_error(404)
                 return
@@ -382,13 +386,16 @@ def test_exact_irm_pipe_iex_entrypoint_without_install() -> None:
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        script = (
-            "$env:WINOWNER_BOOTSTRAP_DRYRUN='1';"
-            f"irm http://127.0.0.1:{server.server_port}/go.ps1|iex"
-        )
+        # Match the documented CMD syntax, replacing only the remote URL.
+        # Explicit dry-run and disposable LocalAppData keep the rehearsal local.
+        command = f'powershell -NoP -C "irm http://127.0.0.1:{server.server_port}/go.ps1|iex"'
+        env = os.environ.copy()
+        env["WINOWNER_BOOTSTRAP_DRYRUN"] = "1"
+        env["LOCALAPPDATA"] = str(fake_appdata)
         result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-            cwd=ROOT,
+            f'cmd.exe /d /s /c "{command}"',
+            cwd=tmp_path,
+            env=env,
             text=True,
             capture_output=True,
             timeout=30,
@@ -397,6 +404,8 @@ def test_exact_irm_pipe_iex_entrypoint_without_install() -> None:
         assert "DRY_RUN_PASS" in result.stdout
         assert "refs/tags/v1.2.0.zip" in result.stdout
         assert "LOCAL_INSTALL_PASS" not in result.stdout
+        assert requests == ["/go.ps1"]
+        assert not (fake_appdata / "WinOwnerMCP").exists()
     finally:
         server.shutdown()
         server.server_close()

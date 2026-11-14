@@ -97,7 +97,7 @@ jobs:
           python -m pytest -q tests/test_oneclick_onboarding.py tests/test_s10_machine_independent_installer.py
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-ReleasePackage.ps1 -DryRun
 
-      - name: Real CMD irm-pipe-iex entrypoint smoke (local HTTP, no install)
+      - name: Real Windows CMD documented entrypoint (loopback dry-run, no install)
         shell: pwsh
         run: |
           python -m pytest -q tests/test_oneclick_onboarding.py::test_exact_irm_pipe_iex_entrypoint_without_install
