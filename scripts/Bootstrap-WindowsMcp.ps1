@@ -12,6 +12,7 @@ param(
     [switch]$OwnerFullControl,
     [switch]$Remove,
     [switch]$DisconnectTunnel,
+    [switch]$TunnelOnly,
     [ValidateRange(1024,65535)][int]$Port = 8768
 )
 Set-StrictMode -Version Latest
@@ -103,8 +104,16 @@ function Stop-VerifiedLocalListener {
     }
 }
 if ($DisconnectTunnel -and -not $Remove) { throw 'DisconnectTunnel requires Remove.' }
+if ($TunnelOnly -and (-not $Remove -or -not $DisconnectTunnel)) {
+    throw 'TunnelOnly requires Remove and DisconnectTunnel.'
+}
+if ($TunnelOnly -and $DryRun) {
+    Step 'TUNNEL_DISCONNECT_DRY_RUN: no service or task changed.'
+    exit 0
+}
 if ($Remove) {
-    $task = Managed-Task
+    $task = $null
+    if (-not $TunnelOnly) { $task = Managed-Task }
     if ($DisconnectTunnel) {
         # Explicit uninstall only; upgrade and profile changes use Remove alone.
         $tunnelTaskName = "WinOwnerTunnel-$Port"
@@ -136,6 +145,10 @@ if ($Remove) {
         } else {
             Step "TUNNEL_TASK_NOT_FOUND: $tunnelTaskName"
         }
+    }
+    if ($TunnelOnly) {
+        Step 'TUNNEL_DISCONNECT_COMPLETE: local MCP service unchanged; remote access revocation is separate.'
+        exit 0
     }
     if ($task) {
         Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue

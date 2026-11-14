@@ -233,7 +233,8 @@ def test_tunnel_status_and_explicit_uninstall_contract() -> None:
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell only")
 @pytest.mark.parametrize("collision", [False, True])
-def test_tunnel_uninstall_checks_exact_task_before_removing(tmp_path: Path, collision: bool) -> None:
+@pytest.mark.parametrize("tunnel_only", [False, True])
+def test_tunnel_uninstall_checks_exact_task_before_removing(tmp_path: Path, collision: bool, tunnel_only: bool) -> None:
     # Mock every scheduled-task mutation: never touch a real tunnel or task.
     scripts = tmp_path / "scripts"
     scripts.mkdir()
@@ -244,7 +245,8 @@ def test_tunnel_uninstall_checks_exact_task_before_removing(tmp_path: Path, coll
         port = listener.getsockname()[1]
     harness = tmp_path / "harness.ps1"
     harness.write_text(r"""
-param([string]$Root, [int]$Port, [int]$Collision)
+param([string]$Root, [int]$Port, [int]$Collision, [int]$TunnelOnly)
+$global:WinOwnerFixtureTunnelOnly=$TunnelOnly
 $global:WinOwnerFixtureRemoved=$false
 $global:WinOwnerFixturePort=$Port
 $global:WinOwnerFixtureRoot=$Root
@@ -252,6 +254,7 @@ $global:WinOwnerFixtureCollision=$Collision
 $global:WinOwnerFixtureStopped=$false
 function global:Get-ScheduledTask {
     [CmdletBinding()] param([string]$TaskName,[string]$TaskPath)
+    if ($global:WinOwnerFixtureTunnelOnly -and $TaskName -eq "WinOwnerMCP-$global:WinOwnerFixturePort") {throw "Local task must not be inspected"}
     if ($TaskName -ne "WinOwnerTunnel-$global:WinOwnerFixturePort" -or $global:WinOwnerFixtureRemoved) {return}
     $runner=Join-Path $global:WinOwnerFixtureRoot 'scripts\Run-WinOwnerTunnel.ps1'
     $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$runner+'"'
@@ -273,12 +276,12 @@ function global:Unregister-ScheduledTask {
     Write-Host 'MOCK_UNREGISTER'; $global:WinOwnerFixtureRemoved=$true
 }
 $ErrorActionPreference='Stop'
-& (Join-Path $Root 'scripts\Bootstrap-WindowsMcp.ps1') -Remove -DisconnectTunnel -Port $Port
+& (Join-Path $Root 'scripts\Bootstrap-WindowsMcp.ps1') -Remove -DisconnectTunnel -TunnelOnly:([bool]$TunnelOnly) -Port $Port
 exit $LASTEXITCODE
 """, encoding="utf-8")
     result = subprocess.run(
         ["powershell.exe", "-NoProfile", "-File", str(harness), "-Root", str(tmp_path),
-         "-Port", str(port), "-Collision", str(int(collision))],
+         "-Port", str(port), "-Collision", str(int(collision)), "-TunnelOnly", str(int(tunnel_only))],
         cwd=tmp_path, capture_output=True, text=True, timeout=18,
     )
     output = result.stdout + result.stderr
@@ -290,6 +293,9 @@ exit $LASTEXITCODE
         assert result.returncode == 0, output
         assert "MOCK_STOP" in output and "MOCK_UNREGISTER" in output
         assert "TUNNEL_TASK_REMOVED" in output
+        if tunnel_only:
+            assert "TUNNEL_DISCONNECT_COMPLETE" in output
+            assert "TASK_REMOVED: WinOwnerMCP-" not in output
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ZIP builder only")
@@ -313,7 +319,7 @@ def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
     with zipfile.ZipFile(tmp_path / "winowner-mcp-v0-onboarding-ci.zip") as archive:
         names = archive.namelist()
         for required in ("go.ps1", "Install-WinOwner.cmd", "Check-WinOwner.cmd",
-                         "Uninstall-WinOwner.cmd", "Connect-ChatGPT.cmd", "Grant-OwnerAccess.cmd", "Show-OwnerKey.cmd", "Revoke-OwnerAccess.cmd", "scripts/Check-WinOwner.ps1",
+                         "Uninstall-WinOwner.cmd", "Connect-ChatGPT.cmd", "Disconnect-ChatGPT.cmd", "Grant-OwnerAccess.cmd", "Show-OwnerKey.cmd", "Revoke-OwnerAccess.cmd", "scripts/Check-WinOwner.ps1",
                          "docs/ADVANCED_CHATGPT.vi.md", "docs/AUTH_NONE.vi.md"):
             assert required in names
         assert "scripts/Setup-WinOwner.ps1" in names
@@ -434,6 +440,8 @@ def test_official_tunnel_client_security_contract() -> None:
     assert "--health.listen-addr" in runner
     assert "--health.url-file" in runner
     assert "mcp_oat_" not in connector  # No implicit owner impersonation
+    assert "Show-OwnerKey.ps1" not in connector
+    assert connector.index("$existing=Get-ScheduledTask") < connector.index("Read-Host 'OpenAI tunnel_id'")
     assert "ReadAllText" in runner
     assert "Show-OwnerKey" in (ROOT / "README.vi.md").read_text(encoding="utf-8")
     assert "Grant-OwnerAccess" in (ROOT / "README.md").read_text(encoding="utf-8")

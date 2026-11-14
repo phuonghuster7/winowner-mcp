@@ -6,6 +6,8 @@ This is an **operator setup guide**, not an automatic activation script. It assu
 
 For guided setup, double-click **Connect-ChatGPT.cmd** after local installation. See [advanced ChatGPT setup](ADVANCED_CHATGPT.vi.md) for obtaining **tunnel_id** and **CONTROL_PLANE_API_KEY** from OpenAI Platform, installing the official tunnel-client, configuring OAuth and verifying the first real tool call.
 
+To disconnect only the verified local tunnel task, use `Disconnect-ChatGPT.cmd`. The local MCP service and local credentials are unchanged. Remote access revocation is separate. Automatic reconfiguration rollback is not implemented.
+
 Official Secure MCP Tunnel reference: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
 
 **Do not confuse ports:** the standalone authenticated owner-profile one-click adapter listens on **127.0.0.1:8768/mcp** by default. Ports 8765/8766 refer to optional components of the older full stack; do not point a new user's tunnel at those ports unless that stack is actually installed and authenticated. Local bootstrap does **not** install tunnel-client or authorize the ChatGPT plugin.

@@ -80,10 +80,10 @@ if($health.status -ne 'ok' -or $health.require_autonomous_auth -ne $true -or
     throw 'WinOwner local auth check failed. Run Check-WinOwner.cmd first.'
 }
 if(-not(Test-Path $gatewayKey -PathType Leaf)){throw 'Local authenticated token missing'}
+$existing=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+if($existing){throw 'Tunnel task exists. Disconnect-ChatGPT.cmd can remove the verified local tunnel task only; local service is kept.'}
 if(-not $TunnelId){$TunnelId=(Read-Host 'OpenAI tunnel_id').Trim()}
 if($TunnelId -notmatch '^tunnel_(?:[a-z0-9]{32}|[a-z0-9]{4}_[a-z0-9]{32})$'){throw 'Invalid official tunnel ID format'}
-$existing=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-if($existing){throw 'Tunnel task exists. Stop and remove it explicitly before configuring again.'}
 $secure=Read-Host 'Runtime API key (hidden)' -AsSecureString
 $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 try{$apiKey=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)}
@@ -155,14 +155,6 @@ mcp:
     Write-Host 'TUNNEL_SETUP_PASS: runtime ready; ChatGPT tool call NOT verified.'
     Write-Host 'In ChatGPT choose Plugins > Add custom MCP server > Tunnel > Authentication None.'
     Write-Host 'Owner permissions need separate verified delegation. Confirm by making a real ChatGPT tool call.'
-    $ownerBundle=Join-Path $private 'owner_delegation_bundle.json'
-    if(Test-Path $ownerBundle -PathType Leaf){
-        $copy=(Read-Host 'Owner token exists. Copy it via an explicit confirmation dialog? (y/N)').Trim()
-        if($copy -eq 'y' -or $copy -eq 'Y'){
-            & powershell.exe -NoProfile -Sta -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Show-OwnerKey.ps1')
-            if($LASTEXITCODE -ne 0){Write-Warning 'Owner token was not copied'}
-        }
-    }
     if(-not $NoBrowser){Start-Process 'https://chatgpt.com/#settings/Connectors'}
 }catch{
     if($createdTask){

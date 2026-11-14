@@ -36,7 +36,7 @@ Giữ chế độ chỉ đọc làm mặc định. Quyền owner cần xác minh
 
 ## 4. Dừng và gỡ
 
-`Uninstall-WinOwner.cmd` kiểm tra và gỡ task dịch vụ và tunnel đã xác minh; giữ lại cấu hình và khóa riêng. Thu hồi quyền plugin/tunnel từ tài khoản riêng.
+`Uninstall-WinOwner.cmd` kiểm tra và gỡ task dịch vụ và tunnel đã xác minh; giữ lại cấu hình và khóa riêng. Thu hồi quyền plugin/tunnel từ tài khoản riêng. `Disconnect-ChatGPT.cmd` chỉ ngắt tunnel đã xác minh, giữ nguyên dịch vụ MCP và cấu hình. Chưa có rollback tự động khi đổi tunnel.
 
 Chạy lại cùng phiên bản để sửa cài đặt; nâng cấp giữ thư mục cũ. Có thể cần kiểm tra lại kết nối ChatGPT. Xem [nâng cấp và sửa lỗi](docs/INSTALLATION.md).
 

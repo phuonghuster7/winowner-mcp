@@ -30,7 +30,7 @@ Keep read-only as the default. Owner access requires separate verified identity,
 
 ## 4. Stop and revoke
 
-`Uninstall-WinOwner.cmd` checks/removes the local service and verified tunnel scheduled task, preserving configuration and secrets. Revoke remote plugin/tunnel access separately.
+`Uninstall-WinOwner.cmd` checks/removes the local service and verified tunnel scheduled task, preserving configuration and secrets. Revoke remote plugin/tunnel access separately. `Disconnect-ChatGPT.cmd` removes the verified tunnel task without stopping the local MCP service. It preserves existing configuration, but automatic reconfiguration rollback is not yet implemented.
 
 Rerunning the same version repairs that installation; side-by-side upgrades keep the previous folder. Remote pairing may need to be checked again. See [upgrade and repair](docs/INSTALLATION.md).
 
