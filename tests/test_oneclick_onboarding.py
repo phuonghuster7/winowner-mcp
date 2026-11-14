@@ -161,6 +161,57 @@ def test_owner_key_missing_or_malformed_bundle_fails_without_disclosure(
     assert "OWNER_TOKEN_COPIED" not in output
 
 
+def test_grant_launcher_reviews_exact_client_before_profile_changes() -> None:
+    launcher = (ROOT / "Grant-OwnerAccess.cmd").read_bytes()
+    assert b'powershell.exe"\r\n"%PWSH%"' in launcher
+    assert launcher.count(b"\r\n") == launcher.count(b"\n")
+    script = (ROOT / "scripts" / "Grant-OwnerAccess.ps1").read_text(encoding="utf-8")
+    prompt = script.index("MessageBox]::Show")
+    assert script.index("Requested client: $ClientId") < prompt
+    assert script.index("Local security preflight failed") < prompt
+    assert script.index("Required installed file missing") < prompt
+    assert "MessageBoxDefaultButton]::Button2" in script
+    assert script.index("DialogResult]::Yes") < script.index("-Remove -Port")
+    assert script.index("DialogResult]::Yes") < script.index("provision --client-id")
+    assert "A typed client ID alone does not prove identity" in script
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows CMD only")
+def test_grant_cmd_calls_stub_and_returns_exit_code(tmp_path: Path) -> None:
+    # No live authorization, credentials, scheduled tasks or profile changes.
+    launcher = tmp_path / "Grant-OwnerAccess.cmd"
+    launcher.write_bytes((ROOT / launcher.name).read_bytes())
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "Grant-OwnerAccess.ps1").write_text(
+        'param([switch]$Probe)\nif(-not $Probe){exit 9}\n'
+        'Write-Output "GRANT_LAUNCHER_PROBE"\nexit 7\n',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", str(launcher), "-Probe"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 7, (result.stdout, result.stderr)
+    assert "GRANT_LAUNCHER_PROBE" in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell only")
+def test_grant_missing_install_refuses_without_dialog(tmp_path: Path) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "Grant-OwnerAccess.ps1"
+    script.write_bytes((ROOT / "scripts" / script.name).read_bytes())
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Sta", "-File", str(script),
+         "-ClientId", "synthetic-fixture"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode != 0
+    assert "virtual environment missing" in result.stdout + result.stderr
+    assert "OWNER_GRANT_CREATED" not in result.stdout
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows ZIP builder only")
 def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
     cmd = [

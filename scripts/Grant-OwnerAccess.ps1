@@ -10,15 +10,35 @@ $cli=Join-Path $PSScriptRoot 'manage_owner_delegation.py'
 $out=Join-Path $root 'runtime\secrets\owner_delegation_bundle.json'
 if(-not(Test-Path -LiteralPath $python -PathType Leaf)){throw 'WinOwner virtual environment missing. Install and check WinOwner first.'}
 if(-not(Test-Path -LiteralPath $cli -PathType Leaf)){throw 'Owner delegation manager missing'}
-$msg="Owner Full Control grants broad file access, commands and potentially destructive changes on this Windows account. This is separate from ChatGPT Authentication None. Confirm only for a client you own and trust."
-$result=[System.Windows.Forms.MessageBox]::Show($msg,'WinOwner - Authorize Owner Full Control',[System.Windows.Forms.MessageBoxButtons]::YesNo,[System.Windows.Forms.MessageBoxIcon]::Warning,[System.Windows.Forms.MessageBoxDefaultButton]::Button2)
-if($result -ne [System.Windows.Forms.DialogResult]::Yes){Write-Host 'Owner authorization cancelled';exit 2}
-if(-not $ClientId){$ClientId=(Read-Host 'Verified ChatGPT OAuth client_id (not a tunnel_id)').Trim()}
+if(-not $ClientId){$ClientId=(Read-Host 'Previously verified ChatGPT OAuth client_id (not a tunnel_id)').Trim()}
 if($ClientId -notmatch '^[A-Za-z0-9_.:-]{5,100}$'){throw 'Invalid client ID. No authorization was granted.'}
 if(Test-Path -LiteralPath $out -PathType Leaf){throw 'Owner token bundle already exists. Revoke old grants before provisioning a replacement.'}
 $bootstrap=Join-Path $PSScriptRoot 'Bootstrap-WindowsMcp.ps1'
-$oldProfile=(Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 5).profile
-if($oldProfile -notin @('read_only','owner_full_control')){throw 'Unexpected local profile'}
+$activeDb=Join-Path $root 'runtime\secrets\oauth.db'
+$signingFile=Join-Path $root 'runtime\secrets\secrets\oauth_signing.key'
+foreach($required in @($bootstrap,$activeDb,$signingFile)){
+    if(-not(Test-Path -LiteralPath $required -PathType Leaf)){
+        throw "Required installed file missing: $(Split-Path $required -Leaf). No permissions changed."
+    }
+}
+$health=Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 5
+$oldProfile=$health.profile
+if($health.status -ne 'ok' -or $health.require_autonomous_auth -ne $true -or
+   $health.allow_loopback_tunnel_identity -ne $false -or
+   $oldProfile -notin @('read_only','owner_full_control')){
+    throw 'Local security preflight failed. No permissions changed.'
+}
+$msg=@(
+    'Owner Full Control grants broad file access, commands and potentially destructive changes on this Windows account.'
+    'This is separate from ChatGPT Authentication None.'
+    ''
+    "Requested client: $ClientId"
+    "Local port: $Port"
+    ''
+    'A typed client ID alone does not prove identity. Confirm only if you have independently verified this exact client and understand its privileges.'
+) -join [Environment]::NewLine
+$result=[System.Windows.Forms.MessageBox]::Show($msg,'WinOwner - Review Owner Full Control',[System.Windows.Forms.MessageBoxButtons]::YesNo,[System.Windows.Forms.MessageBoxIcon]::Warning,[System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+if($result -ne [System.Windows.Forms.DialogResult]::Yes){Write-Host 'Owner authorization cancelled';exit 2}
 $changed=$false
 if($oldProfile -eq 'read_only'){
     Write-Host 'Switching authenticated local task to owner_full_control after owner consent.'
@@ -32,18 +52,8 @@ if($oldProfile -eq 'read_only'){
     $changed=$true
 }
 try{
-    # The installed server binds its OAuth state to runtime/secrets/oauth.db.
-# http_server.resolve_oauth_signing_key_path(db_path=...) resolves the
-# signing key under that DB's parent/secrets subdirectory.
-$activeDb=Join-Path $root 'runtime\secrets\oauth.db'
-$signingFile=Join-Path $root 'runtime\secrets\secrets\oauth_signing.key'
-if(-not(Test-Path -LiteralPath $activeDb -PathType Leaf)){
-    throw 'Active OAuth database is missing; refusing to grant owner access in another database.'
-}
-if(-not(Test-Path -LiteralPath $signingFile -PathType Leaf)){
-    throw 'Active OAuth signing key is missing; refusing to mint incompatible owner tokens.'
-}
-& $python $cli --oauth-db $activeDb --tasks-db $activeDb --signing-key-file $signingFile provision --client-id $ClientId --token-out $out
+    # Use the existing installed adapter database and signing key only.
+    & $python $cli --oauth-db $activeDb --tasks-db $activeDb --signing-key-file $signingFile provision --client-id $ClientId --token-out $out
     if($LASTEXITCODE -ne 0){throw 'Owner grant provisioning failed'}
 }catch{
     if($changed){
