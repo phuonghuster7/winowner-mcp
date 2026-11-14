@@ -26,6 +26,8 @@ $planeKey=Join-Path $private 'tunnel_control_plane.key'
 $localKey=Join-Path $private 'tunnel_mcp_auth_header.key'
 $runner=Join-Path $PSScriptRoot 'Run-WinOwnerTunnel.ps1'
 $taskName="WinOwnerTunnel-$Port"
+$healthUrlFile=Join-Path $clientDir 'health-url.txt'
+$createdTask=$false
 $user=[Security.Principal.WindowsIdentity]::GetCurrent().Name
 function Protect-File([string]$path){
     & icacls.exe $path /inheritance:r /grant:r "$($user):(F)" 'SYSTEM:(F)' | Out-Null
@@ -128,9 +130,29 @@ mcp:
         $principal=New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
         $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
         Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+        $createdTask=$true
+        Remove-Item -LiteralPath $healthUrlFile -Force -ErrorAction SilentlyContinue
         Start-ScheduledTask -TaskName $taskName
+        $ready=$false
+        $deadline=[DateTime]::UtcNow.AddSeconds(45)
+        while([DateTime]::UtcNow -lt $deadline){
+            if(Test-Path -LiteralPath $healthUrlFile -PathType Leaf){
+                try {
+                    $url=([IO.File]::ReadAllText($healthUrlFile)).Trim()
+                    if($url -match '^http://127\.0\.0\.1:[0-9]{1,5}/?$'){
+                        $response=Invoke-WebRequest -Uri ($url.TrimEnd('/')+'/readyz') -UseBasicParsing -TimeoutSec 2 -MaximumRedirection 0
+                        if($response.StatusCode -eq 200){$ready=$true;break}
+                    }
+                }catch{}
+            }
+            Start-Sleep -Milliseconds 750
+        }
+        if(-not $ready){throw 'Tunnel is not ready. Check the runtime key, network and workspace permissions; retry setup.'}
+    }else{
+        Write-Host 'TUNNEL_PREPARED: configuration checked; tunnel not started.'
+        exit 0
     }
-    Write-Host 'TUNNEL_SETUP_PASS: official client, private profile and protected keys installed.'
+    Write-Host 'TUNNEL_SETUP_PASS: runtime ready; ChatGPT tool call NOT verified.'
     Write-Host 'In ChatGPT choose Plugins > Add custom MCP server > Tunnel > Authentication None.'
     Write-Host 'Owner permissions need separate verified delegation. Confirm by making a real ChatGPT tool call.'
     $ownerBundle=Join-Path $private 'owner_delegation_bundle.json'
@@ -142,6 +164,12 @@ mcp:
         }
     }
     if(-not $NoBrowser){Start-Process 'https://chatgpt.com/#settings/Connectors'}
+}catch{
+    if($createdTask){
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    throw
 }finally{
     $apiKey=''
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue

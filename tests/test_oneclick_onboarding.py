@@ -231,6 +231,13 @@ def test_official_tunnel_client_security_contract() -> None:
     assert "env:WINOWNER_INTERNAL_AUTH" in connector
     assert "allow_loopback_tunnel_identity" in connector
     assert "require_autonomous_auth" in connector
+    assert "/readyz" in connector
+    assert "TUNNEL_PREPARED" in connector
+    assert "ChatGPT tool call NOT verified" in connector
+    assert "MaximumRedirection 0" in connector
+    assert "$createdTask" in connector
+    assert "--health.listen-addr" in runner
+    assert "--health.url-file" in runner
     assert "mcp_oat_" not in connector  # No implicit owner impersonation
     assert "ReadAllText" in runner
     assert "Show-OwnerKey" in (ROOT / "README.vi.md").read_text(encoding="utf-8")

@@ -15,7 +15,11 @@ $env:CONTROL_PLANE_API_KEY=([IO.File]::ReadAllText($plane,[Text.Encoding]::UTF8)
 $env:WINOWNER_INTERNAL_AUTH=([IO.File]::ReadAllText($local,[Text.Encoding]::UTF8)).Trim()
 try {
     if($Doctor){& $exe doctor --profile-file $profile --explain}
-    else{& $exe run --profile-file $profile}
+    else{
+        $healthUrlFile=Join-Path $root 'runtime\tunnel\health-url.txt'
+        Remove-Item -LiteralPath $healthUrlFile -Force -ErrorAction SilentlyContinue
+        & $exe run --profile-file $profile --health.listen-addr '127.0.0.1:0' --health.url-file $healthUrlFile
+    }
     exit $LASTEXITCODE
 }finally{
     Remove-Item Env:CONTROL_PLANE_API_KEY -ErrorAction SilentlyContinue
