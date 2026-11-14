@@ -244,7 +244,8 @@ def test_session_survives_adapter_restart_and_auto_recovers_server_issued_sessio
 
 
 
-def test_read_only_static_bearer_cannot_mutate_even_approved_fixture(tmp_path):
+@pytest.mark.parametrize("profile", ["read_only", "owner_full_control"])
+def test_read_only_static_bearer_cannot_mutate_even_approved_fixture(tmp_path, profile):
     """A local read-only profile must cap static connector permissions."""
     import json
     from runtime.contracts import RuntimeStatePaths
@@ -252,6 +253,9 @@ def test_read_only_static_bearer_cannot_mutate_even_approved_fixture(tmp_path):
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private-fixture.txt").write_text("synthetic", encoding="utf-8")
     paths = RuntimeStatePaths.create_isolated(str(tmp_path / "state"))
     config = tmp_path / "fixture-policy.json"
     config.write_text(json.dumps({
@@ -265,7 +269,7 @@ def test_read_only_static_bearer_cannot_mutate_even_approved_fixture(tmp_path):
         }],
     }), encoding="utf-8")
     policy = SecurityPolicy(
-        profile="read_only", allowed_read_roots=[str(workspace)],
+        profile=profile, allowed_read_roots=[str(workspace)],
         allowed_write_roots=[str(workspace)], allowed_exec_roots=[],
         allowed_git_repos=[], audit_log_path=paths.audit_log_path,
         emergency_stop_file=paths.emergency_stop_file,
@@ -280,7 +284,7 @@ def test_read_only_static_bearer_cannot_mutate_even_approved_fixture(tmp_path):
         gateway=gw, caller_auth_token=TOKEN, db_path=paths.oauth_db_path,
     )
     with TestClient(app) as client:
-        assert client.get("/health").json()["profile"] == "read_only"
+        assert client.get("/health").json()["profile"] == profile
         result = rpc(client, "tools/call", params={
             "name": "agent_write_file",
             "arguments": {
@@ -290,3 +294,11 @@ def test_read_only_static_bearer_cannot_mutate_even_approved_fixture(tmp_path):
         }).json()
         assert result.get("error") or result.get("result", {}).get("isError"), result
         assert not (workspace / "probe.txt").exists()
+
+        # The global owner profile must not give a shared connector access
+        # to files outside its explicitly approved workspace.
+        read = rpc(client, "tools/call", params={
+            "name": "agent_read_file",
+            "arguments": {"workspace_root": str(outside), "path": "private-fixture.txt"},
+        }).json()
+        assert read.get("error") or read.get("result", {}).get("isError"), read

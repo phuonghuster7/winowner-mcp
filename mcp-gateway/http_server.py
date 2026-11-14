@@ -1980,7 +1980,7 @@ def _authenticate_autonomous_caller(
 
             try:
                 from runtime.contracts import AuthPrincipal
-                read_only = getattr(gw.policy, "profile", "read_only") == "read_only"
+                read_only = getattr(gw.policy, "profile", "read_only") in {"read_only", "owner_full_control"}
                 principal = AuthPrincipal(
                     client_id=authenticated_identity,
                     owner_id=expected_owner_id,
