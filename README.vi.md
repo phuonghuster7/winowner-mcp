@@ -4,8 +4,6 @@ Kết nối máy Windows 10/11 của bạn với ChatGPT để thực hiện tá
 
 [English](README.md) · [Hướng dẫn kỹ thuật](docs/ADVANCED_CHATGPT.vi.md)
 
-> Bản đang phát triển. Chưa phát hành bộ cài v1.2.0 để sử dụng chính thức.
-
 ```mermaid
 flowchart TD
   A["1 · Cài WinOwner"] --> B["2 · Kết nối riêng"]
@@ -14,7 +12,7 @@ flowchart TD
 ```
 
 ## 1. Cài đặt
-Khi bản v1.2.0 đã phát hành và được xác minh, mở CMD, kiểm tra nguồn bộ cài trước khi dùng lệnh:
+Kiểm tra [Releases](https://github.com/phuonghuster7/winowner-mcp/releases). Lệnh bên dưới cần tag v1.2.0; kiểm tra nguồn bộ cài trước khi chạy trong CMD.
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
