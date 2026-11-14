@@ -242,3 +242,51 @@ def test_session_survives_adapter_restart_and_auto_recovers_server_issued_sessio
         # F) Invalid session ID like "stale-acceptance-session" returns HTTP 404
         assert rpc(client2, headers={**AUTH, "Mcp-Session-Id": "stale-acceptance-session"}).status_code == 404
 
+
+
+def test_read_only_static_bearer_cannot_mutate_even_approved_fixture(tmp_path):
+    """A local read-only profile must cap static connector permissions."""
+    import json
+    from runtime.contracts import RuntimeStatePaths
+    from runtime.coding_tools import CodingToolHandler
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    paths = RuntimeStatePaths.create_isolated(str(tmp_path / "state"))
+    config = tmp_path / "fixture-policy.json"
+    config.write_text(json.dumps({
+        "trusted_mode_enabled": True,
+        "trusted_workspaces": [{
+            "workspace_root": str(workspace),
+            "include_subdirectories": True,
+            "allowed_tools": ["agent_write_file"],
+            "allowed_commands": [],
+            "allowed_callers": ["cloud_client_default"],
+        }],
+    }), encoding="utf-8")
+    policy = SecurityPolicy(
+        profile="read_only", allowed_read_roots=[str(workspace)],
+        allowed_write_roots=[str(workspace)], allowed_exec_roots=[],
+        allowed_git_repos=[], audit_log_path=paths.audit_log_path,
+        emergency_stop_file=paths.emergency_stop_file,
+    )
+    gw = MCPGatewayServer(policy=policy, runtime_paths=paths)
+    agent = gw.get_agent_tool_handler()
+    gw._coding_tool_handler = CodingToolHandler(
+        agent.store, agent.broker, trusted_config_path=config,
+        audit_path=tmp_path / "fixture-audit.db",
+    )
+    app = create_cloud_autonomous_adapter_app(
+        gateway=gw, caller_auth_token=TOKEN, db_path=paths.oauth_db_path,
+    )
+    with TestClient(app) as client:
+        assert client.get("/health").json()["profile"] == "read_only"
+        result = rpc(client, "tools/call", params={
+            "name": "agent_write_file",
+            "arguments": {
+                "workspace_root": str(workspace), "path": "probe.txt",
+                "content": "synthetic fixture only", "expected_sha256": "missing",
+            },
+        }).json()
+        assert result.get("error") or result.get("result", {}).get("isError"), result
+        assert not (workspace / "probe.txt").exists()

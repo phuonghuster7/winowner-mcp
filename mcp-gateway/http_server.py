@@ -1921,18 +1921,20 @@ def _authenticate_autonomous_caller(
 
             try:
                 from runtime.contracts import AuthPrincipal
+                read_only = getattr(gw.policy, "profile", "read_only") == "read_only"
                 principal = AuthPrincipal(
                     client_id=authenticated_identity,
                     owner_id=expected_owner_id,
-                    tier="WRITE",
-                    scopes=frozenset(["mcp:tools", "mcp:autonomous", "mcp:coding:write"]),
+                    tier="READ" if read_only else "WRITE",
+                    scopes=frozenset(["mcp:tools", "mcp:autonomous"] if read_only else
+                                     ["mcp:tools", "mcp:autonomous", "mcp:coding:write"]),
                     is_owner=False,
                     auth_method="static_bearer",
                     metadata={"subject": "static_bearer", "is_authenticated": True},
                 )
                 request.state.auth_principal = principal
             except Exception:
-                pass
+                return False, "", 403, "Unable to establish authenticated caller permissions"
 
             return True, authenticated_identity, 200, ""
         else:
