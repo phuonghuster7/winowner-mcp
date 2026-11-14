@@ -1,6 +1,6 @@
 # Authentication None trong ChatGPT: giao diện đơn giản, quyền Windows vẫn an toàn
 
-Khi sếp thêm WinOwner MCP vào ChatGPT bằng tunnel riêng, mục **Authentication** có thể chọn **None** nếu kết nối phía WinOwner đã được xác thực bằng một cơ chế riêng. Đây là lựa chọn đã có trong ChatGPT; không cần bắt người dùng chọn OAuth trong giao diện nếu tầng backend đã có bảo vệ phù hợp.
+Khi bạn thêm WinOwner MCP vào ChatGPT bằng tunnel riêng, mục **Authentication** có thể chọn **None** nếu kết nối phía WinOwner đã được xác thực bằng một cơ chế riêng. Đây là lựa chọn đã có trong ChatGPT; không cần bắt người dùng chọn OAuth trong giao diện nếu tầng backend đã có bảo vệ phù hợp.
 
 **Phân biệt hai bước:** Authentication None tại màn hình ChatGPT chỉ bỏ đăng nhập OAuth ở màn hình tạo plugin. Nó KHÔNG vô hiệu hóa chứng thực phía máy, KHÔNG chứng minh người dùng là chủ máy và KHÔNG tự cấp Full Control.
 

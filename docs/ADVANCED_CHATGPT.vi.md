@@ -70,7 +70,11 @@ Sau đó, khi đang ở thư mục có tunnel-client.exe:
 
 Tài liệu tham chiếu chính thức: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
 
-### Authentication None cũng là lựa chọn hợp lệ\n\nNếu một tunnel riêng đã có cơ chế chứng thực hợp lệ ở WinOwner, có thể chọn **Authentication: None** tại bước tạo plugin trong ChatGPT. Lựa chọn này không thay thế xác minh owner, không cấp capability grant và không làm thay đổi chính sách chặn HTTP 401 với request không có credential. Xem [giải thích dành cho người mới](AUTH_NONE.vi.md).\n\n## G. Tạo plugin trong ChatGPT
+### Authentication None cũng là lựa chọn hợp lệ
+
+Nếu một tunnel riêng đã có cơ chế chứng thực hợp lệ ở WinOwner, có thể chọn **Authentication: None** tại bước tạo plugin trong ChatGPT. Lựa chọn này không thay thế xác minh owner, không cấp capability grant và không làm thay đổi chính sách chặn HTTP 401 với request không có credential. Xem [giải thích dành cho người mới](AUTH_NONE.vi.md).
+
+## G. Tạo plugin trong ChatGPT
 
 1. Vào **ChatGPT → Plugins → dấu + → Add custom MCP server**. Tên menu có thể khác theo tài khoản.
 2. Ở **Connection**, chọn **Tunnel** rồi chọn tunnel_id đúng với mục F.
