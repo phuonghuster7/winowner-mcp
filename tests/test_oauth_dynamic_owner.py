@@ -80,6 +80,7 @@ def _register_and_authorize_client(
     *,
     client_name: str,
     scope: str,
+    rejected_consent_secret: str | None = None,
 ) -> tuple[str, str, str]:
     """Helper to register and perform PKCE OAuth authorization code flow.
     Returns: (client_id, client_secret, access_token)
@@ -119,6 +120,16 @@ def _register_and_authorize_client(
         "owner_token": owner_secret,
         "csrf_token": csrf_token,
     }
+    if rejected_consent_secret is not None:
+        rejected = client.post(
+            "/oauth/authorize",
+            data={**consent_payload, "owner_token": rejected_consent_secret},
+            cookies={"mcp_oauth_csrf": csrf_token},
+            follow_redirects=False,
+        )
+        assert rejected.status_code in (401, 403)
+        assert "Location" not in rejected.headers
+
     consent_res = client.post(
         "/oauth/authorize",
         data=consent_payload,
@@ -165,9 +176,10 @@ def test_dynamic_oauth_client_owner_full_control():
 
         client_id, client_secret, access_token = _register_and_authorize_client(
             client,
-            owner_secret,
+            app.state.owner_admin_token,
             client_name="ChatGPT-Dynamic-Owner",
             scope="mcp:autonomous mcp:coding:write mcp:owner",
+            rejected_consent_secret=owner_secret,
         )
 
         mcp_hdr = {

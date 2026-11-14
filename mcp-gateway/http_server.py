@@ -2672,13 +2672,27 @@ def register_oauth_endpoints(
         resource = str(body_dict.get("resource") or request.query_params.get("resource") or "mcp-autonomous")
         decision = str(body_dict.get("decision") or body_dict.get("consent") or "allow").lower()
 
-        owner_auth = (
-            _extract_caller_token(request)
-            or body_dict.get("owner_token")
-            or body_dict.get("owner_password")
-        )
+        owner_scope = bool({"mcp:owner", "mcp:all"} & set(scope.split()))
+        if owner_scope:
+            # The connector credential authenticates transport only. Owner
+            # consent must use the independent existing owner administrator
+            # credential, never an injected/shared transport Authorization.
+            owner_auth = body_dict.get("owner_token") or body_dict.get("owner_password")
+            consent_secret = str(getattr(app.state, "owner_admin_token", "") or "")
+            if (not consent_secret or
+                    _verify_caller_token(consent_secret, app.state.caller_auth_token) or
+                    decision not in {"allow", "deny"} or
+                    not (body_dict.get("decision") or body_dict.get("consent"))):
+                return JSONResponse(status_code=403, content={"error": "access_denied"})
+        else:
+            owner_auth = (
+                _extract_caller_token(request)
+                or body_dict.get("owner_token")
+                or body_dict.get("owner_password")
+            )
+            consent_secret = app.state.caller_auth_token
 
-        if not owner_auth or not _verify_caller_token(str(owner_auth), app.state.caller_auth_token):
+        if not owner_auth or not _verify_caller_token(str(owner_auth), consent_secret):
             return JSONResponse(
                 status_code=401,
                 content={

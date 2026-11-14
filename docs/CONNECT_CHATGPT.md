@@ -16,7 +16,7 @@ Official Secure MCP Tunnel reference: https://developers.openai.com/api/docs/gui
 
 - Install the pinned Python requirements and run `scripts/Install-WindowsMcpAgent.ps1 -DryRun` first.
 - Keep every local service bound to `127.0.0.1`. Do not expose 3080, 8765, 8766, 8767 or 8768 directly to the public Internet.
-- The beginner installer selects owner_full_control for verified owners; non-owners and anonymous callers remain denied. Backup existing configs before changing privileges.
+- The beginner installer defaults to read_only. A separately authorized owner may use the supported owner profile; a tunnel connection alone never establishes owner identity. Back up existing configs before changing privileges.
 - Set up a unique OAuth owner identity and the operator's own private tunnel profile; no keys or tunnel IDs are distributed in this repository.
 
 ## 2. Check the local adapter
@@ -40,7 +40,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Connect-ChatGP
   -NewTunnelId "<YOUR_OWN_TUNNEL_ID>" -McpTargetUrl "http://127.0.0.1:8768/mcp"
 ```
 
-At ChatGPT plugin creation, Authentication None is an option when WinOwner is already authenticated by its private tunnel; choosing None by itself does not bypass local HTTP 401 or establish owner permissions. See [Authentication None for beginners](AUTH_NONE.vi.md). The exact connector registration UI and OAuth onboarding steps depend on the ChatGPT account and supported connector type. Never reuse a tunnel ID or token published in somebody else's repository.
+At ChatGPT plugin creation, Authentication None is an option when WinOwner is already authenticated by its private tunnel; choosing None by itself does not bypass local HTTP 401 or establish owner permissions. See [Authentication None for beginners](AUTH_NONE.vi.md). The exact connector registration UI and OAuth onboarding steps depend on the ChatGPT account and supported connector type. Owner-scoped OAuth consent requires the independent owner administration credential; the shared tunnel/caller credential cannot approve owner scopes. Dynamic client registration and authorization are covered by isolated tests. Automatic owner pairing through Authentication None has not been verified or implemented. Never reuse a tunnel ID or token published in somebody else's repository.
 
 ## 4. Verify from ChatGPT
 
