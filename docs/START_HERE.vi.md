@@ -1,29 +1,29 @@
-# WinOwner MCP 1.1.0 — bắt đầu cho người mới
+# WinOwner MCP v1.2.0 — hướng dẫn người mới
 
-## Bước 1 — Kiểm tra quyền ChatGPT
+## Bước 1 — Cài trong CMD
 
-Mở **ChatGPT web → Plugins → + → Add custom MCP server**. Muốn AI ghi/sửa file Windows, workspace phải hỗ trợ **full MCP**; OpenAI hiện ghi nhận Business, Enterprise/Edu. Không thấy mục thêm server thì phải kiểm tra quyền tài khoản trước khi ghép nối.
+    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 
-## Bước 2 — Copy một dòng vào CMD
+Chỉ sử dụng khi tag v1.2.0 đã phát hành và được xác minh. **THÀNH CÔNG** = dịch vụ read_only chạy; **THẤT BẠI** = đọc thông báo CMD. Không tắt SmartScreen/Defender.
 
-Nhấn **Start**, tìm **cmd**, mở **Command Prompt**, dán rồi Enter:
+Nhấn **Win + R**, mở:
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
+    %LOCALAPPDATA%\WinOwnerMCP\v1.2.0
 
-Bộ cài tải và cài Windows. **THÀNH CÔNG** = phần cục bộ đã chạy, **chưa phải ChatGPT kết nối**. **THẤT BẠI** = đọc lý do trên màn hình, không tắt bảo vệ Windows.
+## Bước 2 — Nhấp để kết nối
 
-## Bước 3 — Nhấp đúp để kiểm tra
+`Check-WinOwner.cmd` kiểm tra dịch vụ trên máy. `Connect-ChatGPT.cmd` là trình cấu hình tunnel; chỉ sử dụng tunnel của tài khoản/workspace được phép truy cập.
 
-Nhấn **Win + R**, dán dòng dưới rồi Enter:
+## Bước 3 — Tạo plugin
 
-    %LOCALAPPDATA%\WinOwnerMCP\v1.1.0
+Xem [hướng dẫn kết nối](CONNECT_CHATGPT.md). Authentication None vẫn cần xác thực phía WinOwner; HTTP 401 từ request chưa xác thực là đúng. Không bỏ lớp xác thực để khắc phục lỗi.
 
-Nhấp đúp **Check-WinOwner.cmd**. Dòng THÀNH CÔNG xác nhận dịch vụ cục bộ chạy và từ chối truy cập chưa xác thực. **Uninstall-WinOwner.cmd** dừng dịch vụ và bỏ tự khởi động, giữ lại file và khóa.
+Phân biệt `CHECK_PASS` (dịch vụ trên máy), `TUNNEL_READY` (tunnel sẵn sàng) và kết nối thực tế (ChatGPT gọi thành công tool chỉ đọc). Nếu không thấy mục custom MCP, kiểm tra quyền tài khoản/workspace.
 
-## Bước 4 — Ghép nối ChatGPT
+## Bước 4 — Quyền owner (tùy chọn)
 
-Lần đầu cần quyền tunnel trên OpenAI Platform và xác nhận OAuth trong ChatGPT; không thể thay thế bằng một lệnh CMD. [Hướng dẫn dành cho người có quyền quản trị](ADVANCED_CHATGPT.vi.md).
+Read-only là mặc định. Quyền owner cần xác minh OAuth, cấp quyền riêng và nghiệm thu thu hồi quyền. Không chia sẻ credential; không dán khóa vào chat. Các tiện ích quản trị không cần thiết cho cài đặt chỉ đọc.
 
-**Kiểm tra cuối:** chọn plugin WinOwner trong ChatGPT và gọi công cụ đọc trạng thái hệ thống. Chỉ có phản hồi thật từ công cụ mới chứng minh đã kết nối.
+`Uninstall-WinOwner.cmd` kiểm tra và gỡ task dịch vụ/tunnel đã xác minh, giữ nguyên file và khóa. Thu hồi quyền plugin/tunnel riêng. Khi nâng cấp, giữ bản cũ đến khi kiểm tra xong kết nối mới.
 
-Nếu thiếu Python 3.12, có thể cài từ python.org; nếu cổng 8768 bận, không tự dừng dịch vụ lạ. Không nên tắt SmartScreen hoặc Defender để vượt cảnh báo.
+Xem [Authentication None](AUTH_NONE.vi.md) hoặc [hướng dẫn kỹ thuật](ADVANCED_CHATGPT.vi.md).

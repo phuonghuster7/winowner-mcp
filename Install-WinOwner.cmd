@@ -8,7 +8,7 @@ set "WINOWNER_EXIT=0"
 
 echo.
 echo ===============================================
-echo   WinOwner MCP v1.1.0 - CÀI ĐẶT WINDOWS
+echo   WinOwner MCP v1.2.0 - CÀI ĐẶT WINDOWS
 echo ===============================================
 echo.
 if not exist "%WINOWNER_SETUP%" (

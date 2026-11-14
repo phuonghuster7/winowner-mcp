@@ -84,7 +84,7 @@ jobs:
       - name: P0 redirect, pass-the-hash and loopback regression tests
         shell: pwsh
         run: |
-          python -m pytest -q tests/test_p0_bootstrap_auth_regressions.py
+          python -m pytest -q tests/test_p0_bootstrap_auth_regressions.py tests/test_owner_grant_installed_db.py
 
       - name: Production OAuth persistence and token exchange regression
         shell: pwsh
@@ -96,6 +96,11 @@ jobs:
         run: |
           python -m pytest -q tests/test_oneclick_onboarding.py tests/test_s10_machine_independent_installer.py
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-ReleasePackage.ps1 -DryRun
+
+      - name: Real Windows CMD documented entrypoint (loopback dry-run, no install)
+        shell: pwsh
+        run: |
+          python -m pytest -q tests/test_oneclick_onboarding.py::test_exact_irm_pipe_iex_entrypoint_without_install
 
       - name: Single-line bootstrap safety dry-run
         shell: pwsh
@@ -117,6 +122,10 @@ jobs:
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-WinOwnerOnline.ps1 -Port 18793
 
+      - name: Isolated side-by-side version upgrade, auth-boundary and rollback fixture
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Test-WinOwnerUpgrade.ps1 -Port 18796
       - name: Installer dry-run, no services started
         shell: pwsh
         run: |

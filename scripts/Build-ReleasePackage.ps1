@@ -18,7 +18,7 @@ param(
     [string]$ProjectRoot = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }),
     [string]$OutputDir = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "dist" } else { Join-Path (Get-Location).Path "dist" }),
     [string]$AttestationPath = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "runtime\evidence\test_run_attestation.json" } else { Join-Path (Get-Location).Path "runtime\evidence\test_run_attestation.json" }),
-    [string]$Version = "v1.1.0",
+    [string]$Version = "v1.2.0",
     [switch]$RequireAttestation,
     [switch]$DryRun
 )
@@ -43,7 +43,7 @@ $candidateFiles = New-Object System.Collections.Generic.List[string]
 
 # Root files (.md, LICENSE, .gitignore, .gitattributes)
 Get-ChildItem -Path $ProjectRoot -File | Where-Object {
-    $_.Name -in @("LICENSE", ".gitignore", ".gitattributes", "requirements.txt", "requirements-dev.txt", "pytest.ini", "Install-WinOwner.cmd", "Check-WinOwner.cmd", "Uninstall-WinOwner.cmd", "go.ps1") -or $_.Extension -eq ".md"
+    $_.Name -in @("LICENSE", ".gitignore", ".gitattributes", "requirements.txt", "requirements-dev.txt", "pytest.ini", "Install-WinOwner.cmd", "Check-WinOwner.cmd", "Uninstall-WinOwner.cmd", "Connect-ChatGPT.cmd", "Disconnect-ChatGPT.cmd", "Grant-OwnerAccess.cmd", "Show-OwnerKey.cmd", "Revoke-OwnerAccess.cmd", "go.ps1") -or $_.Extension -eq ".md"
 } | ForEach-Object {
     $candidateFiles.Add($_.FullName.Substring($ProjectRoot.Length).TrimStart('\'))
 }
@@ -230,13 +230,29 @@ if (-not $DryRun) {
             $ZipPath, [System.IO.Compression.ZipArchiveMode]::Create
         )
         try {
+            $archiveEntryNames = New-Object 'System.Collections.Generic.List[string]'
+            # Windows hosted runners may use an 8.3 TEMP alias (RUNNER~1),
+            # while Get-ChildItem's FullName uses a longer normalized path.
+            # Canonicalize the base before calculating relative ZIP names.
+            $canonicalStageRoot = (Get-Item -LiteralPath $packageStageDir).FullName.TrimEnd([IO.Path]::DirectorySeparatorChar)
+            $canonicalPrefix = $canonicalStageRoot + [IO.Path]::DirectorySeparatorChar
             Get-ChildItem -LiteralPath $packageStageDir -File -Recurse -Force |
                 Sort-Object FullName | ForEach-Object {
-                    $name = $_.FullName.Substring($packageStageDir.Length).TrimStart('\', '/').Replace('\', '/')
+                    if (-not $_.FullName.StartsWith($canonicalPrefix,[StringComparison]::OrdinalIgnoreCase)) {
+                        throw "Unexpected release staging path: $($_.Name)"
+                    }
+                    $name = $_.FullName.Substring($canonicalPrefix.Length).Replace([IO.Path]::DirectorySeparatorChar, '/')
+                    if ([string]::IsNullOrWhiteSpace($name) -or $name.StartsWith('/')) {
+                        throw "Unexpected release ZIP entry name: $name"
+                    }
+                    $archiveEntryNames.Add($name)
                     [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                         $archive, $_.FullName, $name, [System.IO.Compression.CompressionLevel]::Optimal
                     ) | Out-Null
                 }
+            if (-not $archiveEntryNames.Contains('Install-WinOwner.cmd')) {
+                throw 'Release ZIP lacks root Install-WinOwner.cmd (bad staging path)'
+            }
         } finally {
             $archive.Dispose()
         }

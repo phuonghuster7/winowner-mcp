@@ -1,31 +1,39 @@
-# WinOwner MCP — v1.1.0
+# WinOwner MCP v1.2.0 — private Windows MCP for ChatGPT
 
-**Install a Windows MCP agent with one CMD command to connect it to ChatGPT.** The local installer defaults to Owner Full Control, effective only for an authenticated, authorized owner.
+**Windows 10/11 · One CMD installer · Read-only by default.**
 
-## Check ChatGPT access first
+This guide describes v1.2.0. Use the pinned installer only after that release is published and verified.
 
-Open **ChatGPT web → Plugins → + → Add custom MCP server**. Windows write/modify tools require a workspace that supports custom **full MCP** connections. According to [OpenAI's current documentation](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt), full MCP is available to **Business and Enterprise/Edu**, while Pro custom MCP connections are limited to read/fetch. If your account lacks the custom MCP option, the Windows component can still install but ChatGPT pairing cannot be completed through this guide.
+## 1. Install
 
-## Install locally with one CMD command
+Open Windows CMD. Use the version-pinned installer from the verified release:
 
-Open **Start → Command Prompt (cmd)**, paste and press Enter:
+    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
+The local installation is in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`. Git is not required. Do not disable security software to install.
 
-WinOwner downloads to %LOCALAPPDATA%\WinOwnerMCP\v1.1.0, installs Python 3.12 if missing and winget is available, and creates a local startup task. No internal MCP token entry is required.
+## 2. Connect ChatGPT
 
-**SUCCESS** confirms the *Windows installation*, **not ChatGPT account pairing**. For failures, read the error in CMD. Do not disable SmartScreen or Defender to work around warnings.
+Open the installation directory. `Check-WinOwner.cmd` reports local service health. `Connect-ChatGPT.cmd` guides private tunnel configuration; the tool itself verifies the pinned tunnel-client package and checks readiness.
 
-## Check and stop the service
+Use the [connection guide](docs/CONNECT_CHATGPT.md) with an account/workspace permitted to add custom MCP servers. Authentication: None is not anonymous Windows access. Use a read-only status check to verify the actual connection.
 
-Press **Win + R**, paste %LOCALAPPDATA%\WinOwnerMCP\v1.1.0 and press Enter. Double-click **Check-WinOwner.cmd** to check the local service. **Uninstall-WinOwner.cmd** stops the agent and unregisters auto-start. Program files, settings and credentials remain; this is not a complete deletion of data.
+| Result | Meaning |
+| --- | --- |
+| `LOCAL_INSTALL_PASS` / `CHECK_PASS` | Local service healthy |
+| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Tunnel readiness verified; ChatGPT not yet verified |
+| Successful read-only tool call from ChatGPT | Actual connection verified |
 
-## Connect ChatGPT
+## 3. Owner permissions
 
-The account owner must create/select a private Platform tunnel, keep tunnel-client running and authorize OAuth in ChatGPT. The local installer cannot grant these account permissions. See the [advanced guide](docs/ADVANCED_CHATGPT.vi.md).
+Keep read-only as the default. Owner access requires separate verified identity, explicit consent and scoped delegation. `Grant-OwnerAccess.cmd` and `Show-OwnerKey.cmd` are sensitive administrative utilities, not required for read-only setup. Never share or paste private credentials into chat. Owner pairing and revocation require separate acceptance testing. To revoke an existing installed owner bundle and its linked grants locally, run `Revoke-OwnerAccess.cmd`. This does not terminate unrelated OAuth credentials or active jobs, change the service profile, or remove the local bundle. Do not reuse the revoked key.
 
-**A real WinOwner tool call from ChatGPT is required for end-to-end acceptance.** Local service health alone is insufficient.
+## 4. Stop and revoke
 
-[Beginner guide](docs/START_HERE.vi.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Security](SECURITY.md) · [Tiếng Việt](README.vi.md)
+`Uninstall-WinOwner.cmd` checks/removes the local service and verified tunnel scheduled task, preserving configuration and secrets. Revoke remote plugin/tunnel access separately. `Disconnect-ChatGPT.cmd` removes the verified tunnel task without stopping the local MCP service. It preserves existing configuration, but automatic reconfiguration rollback is not yet implemented.
 
-MIT licensed; independent of OpenAI and Microsoft.
+Rerunning the same version repairs that installation; side-by-side upgrades keep the previous folder. Remote pairing may need to be checked again. See [upgrade and repair](docs/INSTALLATION.md).
+
+[Quick guide](docs/START_HERE.vi.md) · [Authentication None](docs/AUTH_NONE.vi.md) · [Security](SECURITY.md) · [Vietnamese](README.vi.md)
+
+MIT licensed, independent of OpenAI and Microsoft.

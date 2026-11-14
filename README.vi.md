@@ -1,35 +1,45 @@
-# WinOwner MCP — v1.1.0
+# WinOwner MCP v1.2.0 — kết nối Windows với ChatGPT
 
-**Cài phần mềm điều khiển Windows qua ChatGPT bằng một dòng CMD.** Chế độ mặc định là Owner Full Control, chỉ có hiệu lực với chủ máy đã xác thực và có quyền hợp lệ.
+**Windows 10/11 · Cài bằng một lệnh CMD · Mặc định chỉ đọc.**
 
-## Trước khi cài: kiểm tra quyền ChatGPT
+Hướng dẫn dành cho v1.2.0. Chỉ dùng lệnh cài sau khi phiên bản này được phát hành và xác minh.
 
-Trên ChatGPT web, mở **Plugins → + → Add custom MCP server**. Để ChatGPT ghi/sửa file hay điều khiển Windows, workspace cần hỗ trợ **full MCP** và cho phép tạo kết nối tùy chỉnh. Theo tài liệu OpenAI hiện tại, full MCP dành cho **Business, Enterprise/Edu**; Pro chỉ dùng custom MCP với quyền read/fetch. Không thấy mục này thì phần cài Windows vẫn làm được, nhưng chưa thể hoàn tất kết nối ChatGPT bằng quy trình repo. Xem [tài liệu OpenAI](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt).
+## 1. Cài trên Windows 10/11
 
-## 1. Một lệnh CMD trên Windows 10/11
+Mở CMD và dùng lệnh cài đã ghim phiên bản từ bản phát hành được xác minh:
 
-Nhấn **Start**, tìm **cmd**, mở **Command Prompt**, dán rồi nhấn Enter:
+    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
+Thư mục cài: `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`. Không cần Git. Không tắt phần mềm bảo mật để cài đặt.
 
-Bộ cài tự tải về %LOCALAPPDATA%\WinOwnerMCP\v1.1.0, cài Python 3.12 nếu cần và có winget, tạo dịch vụ MCP tự chạy khi đăng nhập. **Không nhập token nội bộ**.
 
-**THÀNH CÔNG** nghĩa là cài Windows xong, **không đồng nghĩa ChatGPT đã kết nối**. Nếu **THẤT BẠI**, đọc thông báo trong CMD; không tắt SmartScreen hoặc Defender để né cảnh báo.
 
-## 2. Kiểm tra hoặc gỡ dịch vụ
+## 2. Kiểm tra và kết nối ChatGPT
 
-Nhấn **Win + R**, dán đường dẫn này rồi Enter:
+Nhấn Win + R, mở:
 
-    %LOCALAPPDATA%\WinOwnerMCP\v1.1.0
+    %LOCALAPPDATA%\WinOwnerMCP\v1.2.0
 
-Nhấp đúp **Check-WinOwner.cmd** để kiểm tra dịch vụ và truy cập chưa xác thực. Nhấp đúp **Uninstall-WinOwner.cmd** để dừng dịch vụ, gỡ tác vụ tự khởi động. **Tệp chương trình, cấu hình và khóa riêng vẫn được giữ lại**, chưa phải xóa sạch dữ liệu khỏi máy.
+`Check-WinOwner.cmd` kiểm tra dịch vụ cục bộ. `Connect-ChatGPT.cmd` hướng dẫn cấu hình tunnel riêng, kiểm hash bộ tunnel-client và kiểm tra trạng thái sẵn sàng.
 
-## 3. Liên kết ChatGPT
+Xem [hướng dẫn kết nối](docs/START_HERE.vi.md). Tài khoản/workspace cần có quyền thêm MCP. Authentication: None không có nghĩa là bỏ xác thực Windows.
 
-Người có quyền lần đầu tạo/chọn tunnel trên OpenAI Platform, chạy tunnel-client rồi xác nhận OAuth trong ChatGPT. Không thể cấp quyền tài khoản thay người dùng bằng CMD. [Hướng dẫn dành cho người quản trị](docs/ADVANCED_CHATGPT.vi.md).
+| Kết quả | Ý nghĩa |
+| --- | --- |
+| `LOCAL_INSTALL_PASS` / `CHECK_PASS` | Dịch vụ trên máy hoạt động |
+| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Tunnel sẵn sàng, chưa xác nhận ChatGPT |
+| ChatGPT gọi thành công tool chỉ đọc | Kết nối thực tế đã được xác minh |
 
-**Chỉ coi là đã kết nối khi ChatGPT gọi được một công cụ WinOwner thật.** Đừng dựa vào thông báo cài Windows hoặc cổng đang mở.
+## 3. Nếu cần Full Control
 
-[Hướng dẫn người mới](docs/START_HERE.vi.md) · [Khắc phục lỗi](docs/TROUBLESHOOTING.md) · [Bảo mật](SECURITY.md) · [English](README.md)
+Giữ chế độ chỉ đọc làm mặc định. Quyền owner cần xác minh danh tính, sự đồng ý rõ ràng và phân quyền riêng. `Grant-OwnerAccess.cmd` và `Show-OwnerKey.cmd` là tiện ích quản trị nhạy cảm, không cần cho chế độ chỉ đọc. Không chia sẻ khóa riêng hoặc dán khóa vào chat. Cần nghiệm thu riêng luồng cấp và thu hồi quyền. Chạy `Revoke-OwnerAccess.cmd` để thu hồi token owner đã lưu và các grant liên quan. Không thay đổi profile, credential khác, tác vụ đang chạy hoặc file bundle.
 
-Dự án độc lập theo giấy phép MIT, không được OpenAI hay Microsoft bảo trợ.
+## 4. Dừng và gỡ
+
+`Uninstall-WinOwner.cmd` kiểm tra và gỡ task dịch vụ và tunnel đã xác minh; giữ lại cấu hình và khóa riêng. Thu hồi quyền plugin/tunnel từ tài khoản riêng. `Disconnect-ChatGPT.cmd` chỉ ngắt tunnel đã xác minh, giữ nguyên dịch vụ MCP và cấu hình. Chưa có rollback tự động khi đổi tunnel.
+
+Chạy lại cùng phiên bản để sửa cài đặt; nâng cấp giữ thư mục cũ. Có thể cần kiểm tra lại kết nối ChatGPT. Xem [nâng cấp và sửa lỗi](docs/INSTALLATION.md).
+
+[Hướng dẫn ngắn](docs/START_HERE.vi.md) · [Authentication None](docs/AUTH_NONE.vi.md) · [Bảo mật](SECURITY.md) · [English](README.md)
+
+MIT, độc lập với OpenAI và Microsoft.

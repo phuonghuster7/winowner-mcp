@@ -6,6 +6,8 @@ import socket
 import subprocess
 import zipfile
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 import pytest
 
@@ -37,10 +39,12 @@ def test_beginner_entrypoint_and_release_inventory() -> None:
     assert "Get-Credential" not in ps
     for name in ("README.md", "README.vi.md"):
         introduction = (ROOT / name).read_text(encoding="utf-8")
-        assert "v1.1.0" in introduction
+        assert "v1.2.0" in introduction
         assert "ChatGPT" in introduction
         assert not any(name in introduction for name in ("Claude", "Cursor", "Gemini"))
     assert "LOCAL_INSTALL_PASS" in ps
+    assert "LegacyInstallRoot" in (ROOT / "go.ps1").read_text(encoding="utf-8")
+    assert "UpgradeConfirmed" in (ROOT / "go.ps1").read_text(encoding="utf-8")
     assert (ROOT / "scripts" / "Test-WinOwnerOneClick.ps1").is_file()
     assert "Install-WinOwner.cmd" in builder.read_text(encoding="utf-8")
     docs = guide.read_text(encoding="utf-8")
@@ -50,7 +54,7 @@ def test_beginner_entrypoint_and_release_inventory() -> None:
     assert "OAuth" in docs
     assert "Check-WinOwner.cmd" in docs
     assert len(docs.encode("utf-8")) < 6000
-    assert "https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1" in docs
+    assert "https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1" in docs
     assert "go.ps1" in (ROOT / "README.md").read_text(encoding="utf-8")
     assert "*.cmd -text" in (ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert (ROOT / "scripts" / "Test-WinOwnerOnline.ps1").is_file()
@@ -62,15 +66,15 @@ def test_nontech_chatgpt_journey_is_honest_and_actionable() -> None:
     vi = (ROOT / "README.vi.md").read_text(encoding="utf-8")
     en = (ROOT / "README.md").read_text(encoding="utf-8")
     quick = (ROOT / "docs" / "START_HERE.vi.md").read_text(encoding="utf-8")
-    expected = 'powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"'
+    expected = 'powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"'
     for page in (vi, en, quick):
         assert expected in page
-        assert "full MCP" in page
+        assert "Authentication" in page or "Full Control" in page
         assert "Check-WinOwner.cmd" in page
         assert "Uninstall-WinOwner.cmd" in page
-        assert "OAuth" in page
+        assert "Authentication" in page or "OAuth" in page or "owner" in page
         assert "WinOwner MCP" in page
-    assert "Business" in vi and "Enterprise/Edu" in en
+    assert "Connect-ChatGPT.cmd" in vi and "Connect-ChatGPT.cmd" in en
     assert "\u0054\u0048\u00c0\u004e\u0048 \u0043\u00d4\u004e\u0047" in quick
     assert "\u0054\u0048\u1ea4\u0054 \u0042\u1ea0\u0049" in quick
     assert "Win + R" in quick
@@ -81,6 +85,217 @@ def test_nontech_chatgpt_journey_is_honest_and_actionable() -> None:
     assert "127.0.0.1:8765/mcp" not in (
         ROOT / "docs" / "CONNECT_CHATGPT.md"
     ).read_text(encoding="utf-8")
+
+
+def test_chatgpt_authentication_none_is_not_anonymous_owner_access() -> None:
+    guide = (ROOT / "docs" / "AUTH_NONE.vi.md").read_text(encoding="utf-8")
+    intro = (ROOT / "docs" / "START_HERE.vi.md").read_text(encoding="utf-8")
+    cli = (ROOT / "go.ps1").read_text(encoding="utf-8")
+    setup = (ROOT / "scripts" / "Setup-WinOwner.ps1").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "scripts" / "Bootstrap-WindowsMcp.ps1").read_text(encoding="utf-8")
+    for page in (guide, intro):
+        assert "Authentication None" in page
+        assert "401" in page
+    assert "Authentication: None" in guide
+    assert "owner" in guide
+    assert "capability grant" in guide
+    assert "Authentication None is possible with an authenticated tunnel" in cli
+    assert "Authentication None requires a separately secured tunnel" in setup
+    assert "$h.require_autonomous_auth -ne $true" in bootstrap
+    assert "$h.allow_loopback_tunnel_identity -ne $false" in bootstrap
+    assert "remote_oauth_paired=$false" in bootstrap
+
+
+def test_owner_key_launcher_requires_separate_command_and_confirmation() -> None:
+    launcher = (ROOT / "Show-OwnerKey.cmd").read_bytes()
+    assert b'powershell.exe"\r\n"%PWSH%"' in launcher
+    assert launcher.count(b"\r\n") == launcher.count(b"\n")
+    script = (ROOT / "scripts" / "Show-OwnerKey.ps1").read_text(encoding="utf-8")
+    assert "MessageBoxDefaultButton]::Button2" in script
+    assert script.index("DialogResult]::Yes") < script.index("Clipboard]::SetText")
+    assert "Owner credential bundle is invalid" in script
+    assert "Write-Host $token" not in script
+    assert script.index("check-installed-owner") < script.index("Clipboard]::SetText")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows CMD only")
+def test_owner_key_cmd_executes_and_propagates_exit_code(tmp_path: Path) -> None:
+    # Exercise the real launcher with a harmless stub, not a credential reader.
+    launcher = tmp_path / "Show-OwnerKey.cmd"
+    launcher.write_bytes((ROOT / launcher.name).read_bytes())
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "Show-OwnerKey.ps1").write_text(
+        'param([switch]$Probe)\nif(-not $Probe){exit 9}\n'
+        'Write-Output "OWNER_KEY_LAUNCHER_PROBE"\nexit 7\n',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", str(launcher), "-Probe"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 7, (result.stdout, result.stderr)
+    assert "OWNER_KEY_LAUNCHER_PROBE" in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell only")
+@pytest.mark.parametrize("bundle", [None, "{malformed_fixture_marker"])
+def test_owner_key_missing_or_malformed_bundle_fails_without_disclosure(
+    tmp_path: Path, bundle: str | None,
+) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "Show-OwnerKey.ps1"
+    script.write_bytes((ROOT / "scripts" / script.name).read_bytes())
+    if bundle is not None:
+        secret_dir = tmp_path / "runtime" / "secrets"
+        secret_dir.mkdir(parents=True)
+        (secret_dir / "owner_delegation_bundle.json").write_text(bundle, encoding="utf-8")
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Sta", "-File", str(script)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=15,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert ("No owner key exists" if bundle is None else "Owner credential bundle is invalid") in output
+    assert "malformed_fixture_marker" not in output
+    assert "OWNER_TOKEN_COPIED" not in output
+
+
+def test_grant_launcher_reviews_exact_client_before_profile_changes() -> None:
+    launcher = (ROOT / "Grant-OwnerAccess.cmd").read_bytes()
+    assert b'powershell.exe"\r\n"%PWSH%"' in launcher
+    assert launcher.count(b"\r\n") == launcher.count(b"\n")
+    script = (ROOT / "scripts" / "Grant-OwnerAccess.ps1").read_text(encoding="utf-8")
+    prompt = script.index("MessageBox]::Show")
+    assert script.index("Requested client: $ClientId") < prompt
+    assert script.index("Local security preflight failed") < prompt
+    assert script.index("Required installed file missing") < prompt
+    assert "MessageBoxDefaultButton]::Button2" in script
+    assert script.index("DialogResult]::Yes") < script.index("-Remove -Port")
+    assert script.index("DialogResult]::Yes") < script.index("provision --client-id")
+    assert "A typed client ID alone does not prove identity" in script
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows CMD only")
+def test_grant_cmd_calls_stub_and_returns_exit_code(tmp_path: Path) -> None:
+    # No live authorization, credentials, scheduled tasks or profile changes.
+    launcher = tmp_path / "Grant-OwnerAccess.cmd"
+    launcher.write_bytes((ROOT / launcher.name).read_bytes())
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "Grant-OwnerAccess.ps1").write_text(
+        'param([switch]$Probe)\nif(-not $Probe){exit 9}\n'
+        'Write-Output "GRANT_LAUNCHER_PROBE"\nexit 7\n',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", str(launcher), "-Probe"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 7, (result.stdout, result.stderr)
+    assert "GRANT_LAUNCHER_PROBE" in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell only")
+def test_grant_missing_install_refuses_without_dialog(tmp_path: Path) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "Grant-OwnerAccess.ps1"
+    script.write_bytes((ROOT / "scripts" / script.name).read_bytes())
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Sta", "-File", str(script),
+         "-ClientId", "synthetic-fixture"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode != 0
+    assert "virtual environment missing" in result.stdout + result.stderr
+    assert "OWNER_GRANT_CREATED" not in result.stdout
+
+
+def test_tunnel_status_and_explicit_uninstall_contract() -> None:
+    uninstall = (ROOT / "Uninstall-WinOwner.cmd").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "scripts" / "Bootstrap-WindowsMcp.ps1").read_text(encoding="utf-8")
+    check = (ROOT / "scripts" / "Check-WinOwner.ps1").read_text(encoding="utf-8")
+    assert "-Remove -DisconnectTunnel" in uninstall
+    assert "DisconnectTunnel requires Remove" in bootstrap
+    assert "if ($DisconnectTunnel)" in bootstrap
+    assert "Task name collision for $tunnelTaskName" in bootstrap
+    assert "Tunnel task did not stop" in bootstrap
+    assert "Tunnel task removal could not be verified" in bootstrap
+    assert "TUNNEL_TASK_REMOVED" in bootstrap
+    for state in ("TUNNEL_NOT_CONFIGURED", "TUNNEL_UNVERIFIED", "TUNNEL_NOT_RUNNING",
+                  "TUNNEL_NOT_READY", "TUNNEL_READY"):
+        assert state in check
+    assert "MaximumRedirection 0" in check
+    assert "does NOT verify that ChatGPT account pairing is complete" in check
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell only")
+@pytest.mark.parametrize("collision", [False, True])
+@pytest.mark.parametrize("tunnel_only", [False, True])
+def test_tunnel_uninstall_checks_exact_task_before_removing(tmp_path: Path, collision: bool, tunnel_only: bool) -> None:
+    # Mock every scheduled-task mutation: never touch a real tunnel or task.
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "Bootstrap-WindowsMcp.ps1"
+    script.write_bytes((ROOT / "scripts" / script.name).read_bytes())
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    harness = tmp_path / "harness.ps1"
+    harness.write_text(r"""
+param([string]$Root, [int]$Port, [int]$Collision, [int]$TunnelOnly)
+$global:WinOwnerFixtureTunnelOnly=$TunnelOnly
+$global:WinOwnerFixtureRemoved=$false
+$global:WinOwnerFixturePort=$Port
+$global:WinOwnerFixtureRoot=$Root
+$global:WinOwnerFixtureCollision=$Collision
+$global:WinOwnerFixtureStopped=$false
+function global:Get-ScheduledTask {
+    [CmdletBinding()] param([string]$TaskName,[string]$TaskPath)
+    if ($global:WinOwnerFixtureTunnelOnly -and $TaskName -eq "WinOwnerMCP-$global:WinOwnerFixturePort") {throw "Local task must not be inspected"}
+    if ($TaskName -ne "WinOwnerTunnel-$global:WinOwnerFixturePort" -or $global:WinOwnerFixtureRemoved) {return}
+    $runner=Join-Path $global:WinOwnerFixtureRoot 'scripts\Run-WinOwnerTunnel.ps1'
+    $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$runner+'"'
+    $wd=if($global:WinOwnerFixtureCollision){Join-Path $global:WinOwnerFixtureRoot 'other-install'}else{$global:WinOwnerFixtureRoot}
+    [PSCustomObject]@{
+        Actions=@([PSCustomObject]@{Execute=(Join-Path $PSHOME 'powershell.exe');Arguments=$arguments;WorkingDirectory=$wd})
+        Principal=[PSCustomObject]@{UserId=[Security.Principal.WindowsIdentity]::GetCurrent().Name}
+        State=if($global:WinOwnerFixtureStopped){'Ready'}else{'Running'}
+    }
+}
+function global:Stop-ScheduledTask {
+    [CmdletBinding()] param([string]$TaskName,[string]$TaskPath)
+    if($TaskName -ne "WinOwnerTunnel-$global:WinOwnerFixturePort"){throw 'unexpected task'}
+    Write-Host 'MOCK_STOP'; $global:WinOwnerFixtureStopped=$true
+}
+function global:Unregister-ScheduledTask {
+    [CmdletBinding(SupportsShouldProcess=$true)] param([string]$TaskName,[string]$TaskPath)
+    if($TaskName -ne "WinOwnerTunnel-$global:WinOwnerFixturePort"){throw 'unexpected task'}
+    Write-Host 'MOCK_UNREGISTER'; $global:WinOwnerFixtureRemoved=$true
+}
+$ErrorActionPreference='Stop'
+& (Join-Path $Root 'scripts\Bootstrap-WindowsMcp.ps1') -Remove -DisconnectTunnel -TunnelOnly:([bool]$TunnelOnly) -Port $Port
+exit $LASTEXITCODE
+""", encoding="utf-8")
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-File", str(harness), "-Root", str(tmp_path),
+         "-Port", str(port), "-Collision", str(int(collision)), "-TunnelOnly", str(int(tunnel_only))],
+        cwd=tmp_path, capture_output=True, text=True, timeout=18,
+    )
+    output = result.stdout + result.stderr
+    if collision:
+        assert result.returncode != 0
+        assert "Task name collision" in output
+        assert "MOCK_STOP" not in output and "MOCK_UNREGISTER" not in output
+    else:
+        assert result.returncode == 0, output
+        assert "MOCK_STOP" in output and "MOCK_UNREGISTER" in output
+        assert "TUNNEL_TASK_REMOVED" in output
+        if tunnel_only:
+            assert "TUNNEL_DISCONNECT_COMPLETE" in output
+            assert "TASK_REMOVED: WinOwnerMCP-" not in output
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ZIP builder only")
@@ -104,10 +319,12 @@ def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
     with zipfile.ZipFile(tmp_path / "winowner-mcp-v0-onboarding-ci.zip") as archive:
         names = archive.namelist()
         for required in ("go.ps1", "Install-WinOwner.cmd", "Check-WinOwner.cmd",
-                         "Uninstall-WinOwner.cmd", "scripts/Check-WinOwner.ps1",
-                         "docs/ADVANCED_CHATGPT.vi.md"):
+                         "Uninstall-WinOwner.cmd", "Connect-ChatGPT.cmd", "Disconnect-ChatGPT.cmd", "Grant-OwnerAccess.cmd", "Show-OwnerKey.cmd", "Revoke-OwnerAccess.cmd", "scripts/Check-WinOwner.ps1",
+                         "docs/ADVANCED_CHATGPT.vi.md", "docs/AUTH_NONE.vi.md"):
             assert required in names
         assert "scripts/Setup-WinOwner.ps1" in names
+        assert "scripts/Connect-ChatGPT.ps1" in names
+        assert "scripts/Run-WinOwnerTunnel.ps1" in names
         for cmd_file in ("Install-WinOwner.cmd", "Check-WinOwner.cmd", "Uninstall-WinOwner.cmd"):
             raw = archive.read(cmd_file)
             assert b"\r\n" in raw
@@ -145,7 +362,98 @@ def test_beginner_frontend_dry_run_does_not_install() -> None:
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert "DRY_RUN_PASS" in result.stdout
     assert "LOCAL_INSTALL_PASS" not in result.stdout
-    assert "profile=owner_full_control" in result.stdout
+    assert "profile=read_only" in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell and local HTTP server only")
+def test_exact_irm_pipe_iex_entrypoint_without_install(tmp_path: Path) -> None:
+    # Exercise the actual one-line web installation route using a local HTTP
+    # server and an explicit dry-run environment flag. Never touch production.
+    source = (ROOT / "go.ps1").read_bytes()
+    requests: list[str] = []
+    fake_appdata = tmp_path / "LocalAppData"
+    fake_appdata.mkdir()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            if self.path != "/go.ps1":
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(source)))
+            self.end_headers()
+            self.wfile.write(source)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # Match the documented CMD syntax, replacing only the remote URL.
+        # Explicit dry-run and disposable LocalAppData keep the rehearsal local.
+        command = f'powershell -NoP -C "irm http://127.0.0.1:{server.server_port}/go.ps1|iex"'
+        env = os.environ.copy()
+        env["WINOWNER_BOOTSTRAP_DRYRUN"] = "1"
+        env["LOCALAPPDATA"] = str(fake_appdata)
+        result = subprocess.run(
+            f'cmd.exe /d /s /c "{command}"',
+            cwd=tmp_path,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert "DRY_RUN_PASS" in result.stdout
+        assert "refs/tags/v1.2.0.zip" in result.stdout
+        assert "LOCAL_INSTALL_PASS" not in result.stdout
+        assert requests == ["/go.ps1"]
+        assert not (fake_appdata / "WinOwnerMCP").exists()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_official_tunnel_client_security_contract() -> None:
+    connector = (ROOT / "scripts" / "Connect-ChatGPT.ps1").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts" / "Run-WinOwnerTunnel.ps1").read_text(encoding="utf-8")
+    assert "openai/tunnel-client/releases/download" in connector
+    assert "SHA256SUMS.txt" in connector
+    assert "SHA256" in connector
+    assert "cloudflared.exe" in connector and "cloudflared-manifest.json" in connector
+    assert "icacls.exe" in connector
+    assert "Run-WinOwnerTunnel.ps1" in connector
+    assert "env:CONTROL_PLANE_API_KEY" in connector
+    assert "env:WINOWNER_INTERNAL_AUTH" in connector
+    assert "allow_loopback_tunnel_identity" in connector
+    assert "require_autonomous_auth" in connector
+    assert "/readyz" in connector
+    assert "TUNNEL_PREPARED" in connector
+    assert "ChatGPT tool call NOT verified" in connector
+    assert "MaximumRedirection 0" in connector
+    assert "$createdTask" in connector
+    assert "--health.listen-addr" in runner
+    assert "--health.url-file" in runner
+    assert "mcp_oat_" not in connector  # No implicit owner impersonation
+    assert "Show-OwnerKey.ps1" not in connector
+    assert connector.index("$existing=Get-ScheduledTask") < connector.index("Read-Host 'OpenAI tunnel_id'")
+    assert "ReadAllText" in runner
+    assert "Show-OwnerKey" in (ROOT / "README.vi.md").read_text(encoding="utf-8")
+    assert "Grant-OwnerAccess" in (ROOT / "README.md").read_text(encoding="utf-8")
+    grant = (ROOT / "scripts" / "Grant-OwnerAccess.ps1").read_text(encoding="utf-8")
+    # The owner delegation manager must share the active server's OAuth DB,
+    # NOT create separate runtime/oauth_state.db and use an unrelated key.
+    assert "runtime\\secrets\\oauth.db" in grant
+    assert "runtime\\secrets\\secrets\\oauth_signing.key" in grant
+    assert "--oauth-db $activeDb" in grant
+    assert "--signing-key-file $signingFile" in grant
+    assert "read_only" in grant and "OwnerFullControl" in grant
+
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell only")

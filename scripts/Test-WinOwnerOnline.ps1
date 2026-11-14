@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $target = Join-Path $env:TEMP ('winowner-online-smoke-' + $Port + '-' + [Guid]::NewGuid().ToString('N'))
-$zip = Join-Path $root 'dist\winowner-mcp-v1.1.0.zip'
+$zip = Join-Path $root 'dist\winowner-mcp-v1.2.0.zip'
 $taskName = "WinOwnerMCP-$Port"
 if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
     throw "Refusing test: $taskName already exists."
@@ -19,12 +19,12 @@ if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyCon
 }
 $ok = $false
 try {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Build-ReleasePackage.ps1') -ProjectRoot $root -Version v1.1.0
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Build-ReleasePackage.ps1') -ProjectRoot $root -Version v1.2.0
     if ($LASTEXITCODE -ne 0) { throw "Release build failed." }
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'go.ps1') -ArchivePath $zip -InstallRoot $target -Port $Port -NoPythonInstall
     if ($LASTEXITCODE -ne 0) { throw "One-command full local install failed." }
     $health = Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5
-    if ($health.profile -ne 'owner_full_control' -or $health.require_autonomous_auth -ne $true -or
+    if ($health.profile -ne 'read_only' -or $health.require_autonomous_auth -ne $true -or
         $health.allow_loopback_tunnel_identity -ne $false) {
         throw "Owner profile / authentication checks failed."
     }
