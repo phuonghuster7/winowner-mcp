@@ -1,10 +1,8 @@
 # WinOwner MCP — bắt đầu
 
-**Bản v1.2.0 đang phát triển, chưa được phát hành chính thức.**
-
 ## 1. Cài đặt
 
-Sau khi v1.2.0 được phát hành và xác minh, mở CMD, kiểm tra nguồn bộ cài rồi dùng lệnh được công bố:
+Kiểm tra [Releases](https://github.com/phuonghuster7/winowner-mcp/releases). Lệnh bên dưới cần tag v1.2.0; kiểm tra nguồn bộ cài trước khi chạy trong CMD.
 
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
