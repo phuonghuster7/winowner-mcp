@@ -713,6 +713,36 @@ def cmd_revoke_delegation(args: argparse.Namespace) -> int:
     return 0 if revoked_any else 1
 
 
+def cmd_revoke_installed_owner(args: argparse.Namespace) -> int:
+    """Local-only revocation of the existing installed owner bundle."""
+    try:
+        db_path = Path(args.oauth_db).resolve()
+        bundle_path = Path(args.bundle_file).resolve()
+        if not db_path.is_file() or not bundle_path.is_file():
+            raise ValueError("Installed database or owner bundle missing")
+        if Path(args.tasks_db).resolve() != db_path:
+            raise ValueError("Installed revocation requires a single active database")
+        bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+        if not isinstance(bundle, dict):
+            raise ValueError("Invalid installed owner bundle")
+        store = _SQLiteOAuthPersistence(db_path)
+        try:
+            store.revoke_installed_owner_access(
+                client_id=bundle["client_id"], owner_id=bundle["owner_id"],
+                delegation_id=bundle["delegation_id"],
+                grant_id=bundle["capability_grant_id"],
+                token_jti=bundle["oauth_token_jti"], expires_at=float(bundle["expires_at"]),
+            )
+        finally:
+            store.close()
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+        print("INSTALLED_OWNER_REVOKE_FAILED: local records missing or inconsistent.", file=sys.stderr)
+        return 1
+    print("INSTALLED_OWNER_BUNDLE_REVOKED: linked token and grants revoked.")
+    print("Other credentials, service profile, and already running operations are not changed.")
+    return 0
+
+
 def cmd_rehearse_rollback(args: argparse.Namespace) -> int:
     """Execute deterministic staging rollback rehearsal (Workstream C2) without git checkout."""
     from fastapi.testclient import TestClient
@@ -1103,6 +1133,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_rev_del = sub.add_parser("revoke-delegation", help="Revoke an owner durable delegation by delegation_id")
     p_rev_del.add_argument("--delegation-id", required=True)
 
+    p_rev_installed = sub.add_parser("revoke-installed-owner", help="Revoke the existing local installed owner bundle")
+    p_rev_installed.add_argument("--bundle-file", required=True)
+
     sub.add_parser("rehearse-rollback", help="Run isolated staging rollback rehearsal without git checkout (C2)")
 
     p_cut = sub.add_parser("cutover", help="Execute guarded production cutover for port 8768 (D1/D2)")
@@ -1129,6 +1162,8 @@ def main() -> int:
         return cmd_revoke_grant(args)
     if args.command == "revoke-delegation":
         return cmd_revoke_delegation(args)
+    if args.command == "revoke-installed-owner":
+        return cmd_revoke_installed_owner(args)
     if args.command == "rehearse-rollback":
         return cmd_rehearse_rollback(args)
     if args.command == "cutover":

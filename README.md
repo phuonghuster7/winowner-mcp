@@ -26,7 +26,7 @@ Use the [connection guide](docs/CONNECT_CHATGPT.md) with an account/workspace pe
 
 ## 3. Owner permissions
 
-Keep read-only as the default. Owner access requires separate verified identity, explicit consent and scoped delegation. `Grant-OwnerAccess.cmd` and `Show-OwnerKey.cmd` are sensitive administrative utilities, not required for read-only setup. Never share or paste private credentials into chat. Owner pairing and revocation require separate acceptance testing.
+Keep read-only as the default. Owner access requires separate verified identity, explicit consent and scoped delegation. `Grant-OwnerAccess.cmd` and `Show-OwnerKey.cmd` are sensitive administrative utilities, not required for read-only setup. Never share or paste private credentials into chat. Owner pairing and revocation require separate acceptance testing. To revoke an existing installed owner bundle and its linked grants locally, run `Revoke-OwnerAccess.cmd`. This does not terminate unrelated OAuth credentials or active jobs, change the service profile, or remove the local bundle. Do not reuse the revoked key.
 
 ## 4. Stop and revoke
 

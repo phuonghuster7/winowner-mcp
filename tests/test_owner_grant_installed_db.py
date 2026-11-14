@@ -46,3 +46,37 @@ def test_owner_grant_provision_matches_installed_adapter_db(tmp_path: Path) -> N
     assert rec["client_id"] == "chatgpt-owner-isolated-test"
     assert rec["oauth_token_jti"] == info["oauth_token_jti"]
     assert "mcp:owner" in info["scope"]
+
+    # Only matching installed records are eligible for local revocation.
+    revoke_cmd = [
+        sys.executable, str(ROOT / "scripts" / "manage_owner_delegation.py"),
+        "--oauth-db", str(db), "--tasks-db", str(db),
+        "revoke-installed-owner", "--bundle-file",
+    ]
+    mismatch = tmp_path / "mismatch.json"
+    mismatch.write_text(json.dumps({**info, "client_id": "another-fixture-client"}), encoding="utf-8")
+    rejected = subprocess.run(revoke_cmd + [str(mismatch)], cwd=tmp_path,
+                              env=env, text=True, capture_output=True, timeout=40)
+    assert rejected.returncode != 0
+    assert info["access_token"] not in rejected.stdout + rejected.stderr
+    assert not persistence.is_token_revoked(info["oauth_token_jti"])
+    assert not persistence.get_owner_capability_grant(info["capability_grant_id"])["revoked"]
+
+    # Revocation is persisted and idempotent, even for an already-open store.
+    for _ in range(2):
+        revoked = subprocess.run(revoke_cmd + [str(bundle)], cwd=tmp_path,
+                                 env=env, text=True, capture_output=True, timeout=40)
+        assert revoked.returncode == 0, revoked.stderr
+        assert "INSTALLED_OWNER_BUNDLE_REVOKED" in revoked.stdout
+        assert info["access_token"] not in revoked.stdout + revoked.stderr
+        assert persistence.is_token_revoked(info["oauth_token_jti"])
+        assert persistence.get_owner_capability_grant(info["capability_grant_id"])["revoked"]
+        assert persistence.get_owner_durable_delegation(info["delegation_id"])["revoked"]
+        ok, _, err = _verify_oauth_token(
+            info["access_token"], signing_key, set(), persistence=persistence,
+            expected_owner_id="local_owner",
+        )
+        assert not ok and "revoked" in err.lower()
+
+    # Revocation must not delete credential storage or provision replacements.
+    assert json.loads(bundle.read_text(encoding="utf-8")) == info

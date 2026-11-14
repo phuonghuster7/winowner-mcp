@@ -312,7 +312,7 @@ def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
     with zipfile.ZipFile(tmp_path / "winowner-mcp-v0-onboarding-ci.zip") as archive:
         names = archive.namelist()
         for required in ("go.ps1", "Install-WinOwner.cmd", "Check-WinOwner.cmd",
-                         "Uninstall-WinOwner.cmd", "Connect-ChatGPT.cmd", "Grant-OwnerAccess.cmd", "Show-OwnerKey.cmd", "scripts/Check-WinOwner.ps1",
+                         "Uninstall-WinOwner.cmd", "Connect-ChatGPT.cmd", "Grant-OwnerAccess.cmd", "Show-OwnerKey.cmd", "Revoke-OwnerAccess.cmd", "scripts/Check-WinOwner.ps1",
                          "docs/ADVANCED_CHATGPT.vi.md", "docs/AUTH_NONE.vi.md"):
             assert required in names
         assert "scripts/Setup-WinOwner.ps1" in names

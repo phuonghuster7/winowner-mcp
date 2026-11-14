@@ -916,6 +916,65 @@ class _SQLiteOAuthPersistence:
             )
             return cur.rowcount > 0
 
+    def revoke_installed_owner_access(
+        self, *, client_id: str, owner_id: str, delegation_id: str,
+        grant_id: str, token_jti: str, expires_at: float,
+    ) -> None:
+        """Atomically revoke the installed bundle's token and linked grants.
+
+        The identifiers must match existing local records. This method never
+        grants authority, changes a profile, or revokes another client's bundle.
+        """
+        import math
+
+        if not all(isinstance(v, str) and v.strip() for v in
+                   (client_id, owner_id, delegation_id, grant_id, token_jti)):
+            raise ValueError("Incomplete installed owner bundle")
+        if not math.isfinite(expires_at):
+            raise ValueError("Invalid installed owner token expiry")
+        now = time.time()
+        reason = "installed_owner_access_revoked"
+        with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            delegation = conn.execute(
+                "SELECT client_id, owner_id FROM owner_durable_delegations WHERE delegation_id = ?",
+                (delegation_id,),
+            ).fetchone()
+            grant = conn.execute(
+                "SELECT client_id, owner_id, delegation_id, oauth_token_jti "
+                "FROM owner_capability_grants WHERE grant_id = ?", (grant_id,),
+            ).fetchone()
+            if (delegation is None or grant is None
+                    or tuple(delegation) != (client_id, owner_id)
+                    or tuple(grant) != (client_id, owner_id, delegation_id, token_jti)):
+                raise ValueError("Installed owner bundle does not match local grant records")
+            conn.execute(
+                "UPDATE owner_durable_delegations SET revoked = 1, revoked_reason = ? "
+                "WHERE delegation_id = ? AND client_id = ? AND owner_id = ?",
+                (reason, delegation_id, client_id, owner_id),
+            )
+            conn.execute(
+                "UPDATE owner_capability_grants SET revoked = 1, revoked_reason = ? "
+                "WHERE client_id = ? AND owner_id = ? "
+                "AND (delegation_id = ? OR oauth_token_jti = ?)",
+                (reason, client_id, owner_id, delegation_id, token_jti),
+            )
+            conn.execute(
+                "UPDATE owner_cloud_leases SET revoked = 1 WHERE grant_id IN "
+                "(SELECT grant_id FROM owner_capability_grants WHERE client_id = ? "
+                "AND owner_id = ? AND (delegation_id = ? OR oauth_token_jti = ?))",
+                (client_id, owner_id, delegation_id, token_jti),
+            )
+            conn.execute(
+                """INSERT INTO oauth_revocations
+                   (token_id, client_id, revoked_at, expires_at, reason)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(token_id) DO UPDATE SET
+                     expires_at = MAX(oauth_revocations.expires_at, excluded.expires_at),
+                     reason = excluded.reason""",
+                (token_jti, client_id, now, max(expires_at, now + 86400 * 30), reason),
+            )
+
     def get_owner_durable_delegation(self, delegation_id: str) -> dict[str, Any] | None:
         with self._db() as conn:
             cur = conn.execute(

@@ -32,7 +32,7 @@ Xem [hướng dẫn kết nối](docs/START_HERE.vi.md). Tài khoản/workspace 
 
 ## 3. Nếu cần Full Control
 
-Giữ chế độ chỉ đọc làm mặc định. Quyền owner cần xác minh danh tính, sự đồng ý rõ ràng và phân quyền riêng. `Grant-OwnerAccess.cmd` và `Show-OwnerKey.cmd` là tiện ích quản trị nhạy cảm, không cần cho chế độ chỉ đọc. Không chia sẻ khóa riêng hoặc dán khóa vào chat. Cần nghiệm thu riêng luồng cấp và thu hồi quyền.
+Giữ chế độ chỉ đọc làm mặc định. Quyền owner cần xác minh danh tính, sự đồng ý rõ ràng và phân quyền riêng. `Grant-OwnerAccess.cmd` và `Show-OwnerKey.cmd` là tiện ích quản trị nhạy cảm, không cần cho chế độ chỉ đọc. Không chia sẻ khóa riêng hoặc dán khóa vào chat. Cần nghiệm thu riêng luồng cấp và thu hồi quyền. Chạy `Revoke-OwnerAccess.cmd` để thu hồi token owner đã lưu và các grant liên quan. Không thay đổi profile, credential khác, tác vụ đang chạy hoặc file bundle.
 
 ## 4. Dừng và gỡ
 
