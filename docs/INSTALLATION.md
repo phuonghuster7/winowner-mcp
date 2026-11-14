@@ -55,3 +55,15 @@ Run collection and a focused non-mutating subset on a **disposable** checkout:
     .\.venv\Scripts\python.exe -m pytest -q tests/test_mcp_gateway.py tests/test_owner_full_control.py tests/test_oauth_dynamic_owner.py tests/test_direct_coding_security.py
 
 No shared OAuth secret or owner delegation is supplied in this repository. For a failed connector, check owner OAuth, tunnel runtime, port binding and logs locally; redact credentials before sharing any diagnostic output.
+
+
+## Upgrade and repair checks
+
+The version-pinned command installs side by side; it does not automatically transfer
+private credentials or reauthorize ChatGPT. Keep the previous folder until both the
+new local service and your actual ChatGPT connection work. Rerunning the same
+version repairs that installation instead of overwriting configuration. A separately
+obtained trusted archive SHA-256 can be supplied as ExpectedArchiveSha256 when running
+go.ps1; a tag and HTTPS alone are not an independent integrity check. A rollback is
+reported as verified only after the old local service passes health and authentication
+checks. Remote pairing remains a separate check.

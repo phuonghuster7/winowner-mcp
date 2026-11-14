@@ -36,7 +36,29 @@ try{
     if($LASTEXITCODE -ne 0){throw 'Could not start simulated old local task'}
     $before=Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5
     if($before.profile -ne 'read_only'){throw 'Old task precondition was not read-only'}
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'go.ps1') -ArchivePath $zip -InstallRoot $current -LegacyInstallRoot $legacy -UpgradeConfirmed -NoPythonInstall -Port $Port
+    $digest=(Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+    $marker=Join-Path $legacy 'upgrade-test-settings.txt'
+    [IO.File]::WriteAllText($marker,'isolated fixture: preserve previous settings')
+    $invalidDigest = if($digest.StartsWith('0')) { ('1' * 64) } else { ('0' * 64) }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'go.ps1') -ArchivePath $zip -ExpectedArchiveSha256 $invalidDigest -InstallRoot $current -LegacyInstallRoot $legacy -UpgradeConfirmed -NoPythonInstall -Port $Port
+    if($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $current)){throw 'Digest mismatch was not rejected before installation'}
+    $unchanged=Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5
+    if($unchanged.profile -ne 'read_only'){throw 'Previous service changed after invalid digest'}
+    Write-Host 'DIGEST_MISMATCH_REJECTED'
+    # An isolated broken installer simulates failure after the old service stops.
+    $broken=Join-Path $base 'broken-install'
+    New-Item -ItemType Directory -Path $broken -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $broken 'Install-WinOwner.cmd'),"@echo off" + [Environment]::NewLine + "exit /b 9" + [Environment]::NewLine,[Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText((Join-Path $broken 'Check-WinOwner.cmd'),"@echo off" + [Environment]::NewLine + "exit /b 9" + [Environment]::NewLine,[Text.Encoding]::ASCII)
+    $failureOutput=(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'go.ps1') -InstallRoot $broken -LegacyInstallRoot $legacy -UpgradeConfirmed -NoPythonInstall -Port $Port | Out-String)
+    $failureExit=$LASTEXITCODE
+    Write-Host $failureOutput
+    if($failureExit -eq 0 -or $failureOutput -notmatch 'ROLLBACK_VERIFIED'){throw 'Failed upgrade did not verify recovery'}
+    $restoredTask=Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    if(@($restoredTask.Actions)[0].Arguments.IndexOf((Join-Path $legacy 'scripts\Run-WinOwnerMcp.py'),[StringComparison]::OrdinalIgnoreCase) -lt 0){throw 'Rollback task did not return to previous root'}
+    if([IO.File]::ReadAllText($marker) -ne 'isolated fixture: preserve previous settings'){throw 'Rollback modified previous settings'}
+    Write-Host 'FAILED_UPGRADE_ROLLBACK_PASS'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'go.ps1') -ArchivePath $zip -ExpectedArchiveSha256 $digest -InstallRoot $current -LegacyInstallRoot $legacy -UpgradeConfirmed -NoPythonInstall -Port $Port
     if($LASTEXITCODE -ne 0){throw 'Upgrader returned nonzero'}
     $after=Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 5
     if($after.profile -ne 'read_only' -or $after.require_autonomous_auth -ne $true){throw 'New local service violates security profile'}
@@ -45,6 +67,13 @@ try{
         throw 'Upgrade task did not switch to new version root'
     }
     if(-not(Test-Path (Join-Path $legacy 'runtime\secrets\gateway_caller.token'))){throw 'Old private credentials were erased'}
+    if([IO.File]::ReadAllText($marker) -ne 'isolated fixture: preserve previous settings'){throw 'Upgrade modified previous settings'}
+    $newMarker=Join-Path $current 'repair-test-settings.txt'
+    [IO.File]::WriteAllText($newMarker,'isolated fixture: preserve current settings')
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'go.ps1') -InstallRoot $current -LegacyInstallRoot (Join-Path $base 'no-legacy') -NoPythonInstall -Port $Port
+    if($LASTEXITCODE -ne 0){throw 'Same-version repair failed'}
+    if([IO.File]::ReadAllText($newMarker) -ne 'isolated fixture: preserve current settings'){throw 'Repair modified current settings'}
+    Write-Host 'SAME_VERSION_REPAIR_PASS'
     Write-Host 'SIDE_BY_SIDE_UPGRADE_PASS: new owner-bound task verified, old secrets retained'
     $passed=$true
 }finally{

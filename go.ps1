@@ -14,6 +14,7 @@ param(
     [ValidateRange(1024,65535)][int]$Port = 8768,
     [string]$InstallRoot = '',
     [string]$ArchivePath = '',
+    [ValidatePattern('^(?:[A-Fa-f0-9]{64})?$')][string]$ExpectedArchiveSha256 = '',
     [switch]$NoPythonInstall,
     [switch]$OwnerFullControl,
     [string]$LegacyInstallRoot = '',
@@ -69,6 +70,15 @@ try {
         }
         if ((Get-Item -LiteralPath $zip).Length -lt 30000) {
             throw 'Downloaded archive is unexpectedly small.'
+        }
+        if ($ExpectedArchiveSha256) {
+            $actualSha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+            if ($actualSha256 -ne $ExpectedArchiveSha256) {
+                throw 'Archive SHA-256 mismatch. Installation files and existing services were not changed.'
+            }
+            Write-Host 'ARCHIVE_SHA256_PASS'
+        } else {
+            Write-Warning 'Archive digest not independently supplied. HTTPS and a pinned tag alone do not verify release integrity.'
         }
         $unpack = Join-Path $tempDir 'unpacked'
         Expand-Archive -LiteralPath $zip -DestinationPath $unpack -Force
@@ -127,6 +137,10 @@ try {
         }
     }
     Write-Host 'Installing and checking Windows MCP...'
+    $checkFile = Join-Path $InstallRoot 'Check-WinOwner.cmd'
+    if (-not (Test-Path -LiteralPath $checkFile -PathType Leaf)) {
+        throw 'Local check script missing; refusing to report successful installation.'
+    }
     $installerArgs = @('-NoOpenGuide','-Port',[string]$Port)
     if ($NoPythonInstall) { $installerArgs += '-NoPythonInstall' }
     if ($OwnerFullControl) { $installerArgs += '-OwnerFullControl' }
@@ -142,6 +156,8 @@ try {
     if (-not $statusText.Contains('LOCAL_INSTALL_PASS')) {
         throw 'The local installation did not report success.'
     }
+    & $checkFile -Port $Port
+    if ($LASTEXITCODE -ne 0) { throw 'Post-install local health/auth verification failed.' }
     Write-Host ''
     Write-Host '[THANH CONG] WinOwner MCP da cai dat tren Windows.' -ForegroundColor Green
     Write-Host "Kiem tra: $InstallRoot\Check-WinOwner.cmd"
@@ -152,14 +168,31 @@ try {
         Write-Warning 'New install failed. Attempting verified rollback to previous version.'
         try {
             $newTask=Get-ScheduledTask -TaskName "WinOwnerMCP-$Port" -ErrorAction SilentlyContinue
-            if ($newTask -and @($newTask.Actions)[0].Arguments -like "*$InstallRoot*") {
+            if ($newTask) {
+                $actions=@($newTask.Actions)
+                $expectedRunner=Join-Path $InstallRoot 'scripts\Run-WinOwnerMcp.py'
+                $expectedArgs='^-u\s+"'+[regex]::Escape($expectedRunner)+'"\s+--port\s+'+$Port+'\s+--profile\s+(read_only|owner_full_control)$'
+                if ($actions.Count -ne 1 -or $actions[0].Arguments -notmatch $expectedArgs -or
+                    $actions[0].Execute -notin @((Join-Path $InstallRoot '.venv\Scripts\python.exe'),(Join-Path $InstallRoot '.venv\Scripts\pythonw.exe')) -or
+                    $newTask.Principal.UserId -notin @([Security.Principal.WindowsIdentity]::GetCurrent().Name,$env:USERNAME,("$env:USERDOMAIN\$env:USERNAME"))) {
+                    throw 'Rollback refused to stop an unverified task.'
+                }
                 & (Join-Path $InstallRoot 'Uninstall-WinOwner.cmd') -Port $Port
+                if ($LASTEXITCODE -ne 0) { throw 'New service removal failed.' }
             }
             $oldArgs=@('-NoPythonInstall','-NoOpenGuide','-Port',[string]$Port)
             if ($legacyMode -eq 'read_only') { $oldArgs += '-ReadOnly' }
             & (Join-Path $legacyRoot 'Install-WinOwner.cmd') @oldArgs
-            if ($LASTEXITCODE -ne 0) { Write-Warning 'Rollback incomplete: old files and secrets remain for manual recovery.' }
-        } catch { Write-Warning 'Automatic rollback could not be verified; old installation remains intact.' }
+            if ($LASTEXITCODE -ne 0) { throw 'Previous service startup failed.' }
+            & (Join-Path $legacyRoot 'Check-WinOwner.cmd') -Port $Port
+            if ($LASTEXITCODE -ne 0) { throw 'Previous service failed health/auth checks.' }
+            $restored=Invoke-RestMethod -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 5
+            if ($restored.profile -ne $legacyMode -or $restored.require_autonomous_auth -ne $true -or
+                $restored.allow_loopback_tunnel_identity -ne $false) {
+                throw 'Previous service profile or authentication changed.'
+            }
+            Write-Host 'ROLLBACK_VERIFIED: previous local service restored; remote pairing not verified.'
+        } catch { Write-Warning 'ROLLBACK_INCOMPLETE: previous files remain for manual recovery; check local service before reconnecting.' }
     }
     Write-Host ('[THAT BAI] ' + $_.Exception.Message) -ForegroundColor Red
     if ($env:WINOWNER_DEBUG -eq '1') { Write-Host ('DEBUG: ' + $_.ScriptStackTrace) }
