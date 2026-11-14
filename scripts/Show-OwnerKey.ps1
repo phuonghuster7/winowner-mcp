@@ -18,6 +18,17 @@ try{
 $now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 if($expires -le $now){throw 'Owner OAuth token expired. Revoke/renew it through the owner access manager.'}
 if(-not $token.StartsWith('mcp_oat_')){throw 'Owner token bundle has invalid format'}
+# Refuse to copy if the installed authorization cannot be checked.
+$python=Join-Path $root '.venv\Scripts\python.exe'
+$cli=Join-Path $PSScriptRoot 'manage_owner_delegation.py'
+$db=Join-Path $root 'runtime\secrets\oauth.db'
+if(-not(Test-Path -LiteralPath $python -PathType Leaf) -or
+   -not(Test-Path -LiteralPath $cli -PathType Leaf) -or
+   -not(Test-Path -LiteralPath $db -PathType Leaf)){
+    throw 'Owner revocation status unavailable. Credential copy blocked.'
+}
+& $python $cli --oauth-db $db --tasks-db $db check-installed-owner --bundle-file $file
+if($LASTEXITCODE -ne 0){throw 'Owner bundle revoked, expired or unverified. Credential copy blocked.'}
 Write-Host ('Owner token expires (UTC): '+[DateTimeOffset]::FromUnixTimeSeconds($expires).UtcDateTime.ToString('u'))
 $msg="Copy a highly privileged owner OAuth token to the Windows clipboard? Only paste it into a trusted WinOwner owner-authorization field. Do not paste it into the Platform API key screen or share it in chat. Clipboard contents may be read by other programs."
 $result=[System.Windows.Forms.MessageBox]::Show($msg,'WinOwner - Copy Owner Credential',[System.Windows.Forms.MessageBoxButtons]::YesNo,[System.Windows.Forms.MessageBoxIcon]::Warning,[System.Windows.Forms.MessageBoxDefaultButton]::Button2)

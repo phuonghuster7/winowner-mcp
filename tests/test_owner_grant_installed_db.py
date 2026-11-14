@@ -47,6 +47,17 @@ def test_owner_grant_provision_matches_installed_adapter_db(tmp_path: Path) -> N
     assert rec["oauth_token_jti"] == info["oauth_token_jti"]
     assert "mcp:owner" in info["scope"]
 
+    check_cmd = [
+        sys.executable, str(ROOT / "scripts" / "manage_owner_delegation.py"),
+        "--oauth-db", str(db), "--tasks-db", str(db),
+        "check-installed-owner", "--bundle-file", str(bundle),
+    ]
+    status = subprocess.run(check_cmd, cwd=tmp_path, env=env,
+                            text=True, capture_output=True, timeout=40)
+    assert status.returncode == 0, status.stderr
+    assert "OWNER_BUNDLE_LOCAL_RECORDS_NOT_REVOKED" in status.stdout
+    assert info["access_token"] not in status.stdout + status.stderr
+
     # Only matching installed records are eligible for local revocation.
     revoke_cmd = [
         sys.executable, str(ROOT / "scripts" / "manage_owner_delegation.py"),
@@ -77,6 +88,12 @@ def test_owner_grant_provision_matches_installed_adapter_db(tmp_path: Path) -> N
             expected_owner_id="local_owner",
         )
         assert not ok and "revoked" in err.lower()
+
+    status = subprocess.run(check_cmd, cwd=tmp_path, env=env,
+                            text=True, capture_output=True, timeout=40)
+    assert status.returncode != 0
+    assert "OWNER_BUNDLE_REVOKED" in status.stdout
+    assert info["access_token"] not in status.stdout + status.stderr
 
     # Revocation must not delete credential storage or provision replacements.
     assert json.loads(bundle.read_text(encoding="utf-8")) == info

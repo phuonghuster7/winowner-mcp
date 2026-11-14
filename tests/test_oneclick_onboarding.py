@@ -115,6 +115,7 @@ def test_owner_key_launcher_requires_separate_command_and_confirmation() -> None
     assert script.index("DialogResult]::Yes") < script.index("Clipboard]::SetText")
     assert "Owner credential bundle is invalid" in script
     assert "Write-Host $token" not in script
+    assert script.index("check-installed-owner") < script.index("Clipboard]::SetText")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows CMD only")

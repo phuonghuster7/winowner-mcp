@@ -743,6 +743,70 @@ def cmd_revoke_installed_owner(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check_installed_owner(args: argparse.Namespace) -> int:
+    """Fail closed on missing, inconsistent, expired or revoked bundle state.
+
+    Read only; never issue or renew credentials. This is not remote pairing
+    verification or proof of a currently authorized session.
+    """
+    try:
+        db = Path(args.oauth_db).resolve()
+        path = Path(args.bundle_file).resolve()
+        if not db.is_file() or not path.is_file():
+            raise ValueError("Missing local records")
+        if Path(args.tasks_db).resolve() != db:
+            raise ValueError("Expected one installed database")
+        bundle = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(bundle, dict):
+            raise ValueError("Invalid bundle")
+        owner = bundle["owner_id"]
+        client = bundle["client_id"]
+        delegation_id = bundle["delegation_id"]
+        grant_id = bundle["capability_grant_id"]
+        jti = bundle["oauth_token_jti"]
+        token = bundle["access_token"]
+        if not all(isinstance(v, str) and v.strip() for v in
+                   (owner, client, delegation_id, grant_id, jti, token)):
+            raise ValueError("Incomplete bundle")
+        now = time.time()
+        if not float(bundle["expires_at"]) > now:
+            print("OWNER_BUNDLE_EXPIRED")
+            return 1
+        conn = sqlite3.connect(db.as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            conn.execute("BEGIN")
+            delegation = conn.execute(
+                "SELECT client_id, owner_id, revoked, expires_at "
+                "FROM owner_durable_delegations WHERE delegation_id = ?",
+                (delegation_id,),
+            ).fetchone()
+            grant = conn.execute(
+                "SELECT client_id, owner_id, delegation_id, oauth_token_jti, revoked "
+                "FROM owner_capability_grants WHERE grant_id = ?", (grant_id,),
+            ).fetchone()
+            revoked = conn.execute(
+                "SELECT 1 FROM oauth_revocations WHERE token_id IN (?, ?) "
+                "AND expires_at >= ?", (jti, token, now),
+            ).fetchone()
+        finally:
+            conn.close()
+        if (delegation is None or grant is None
+                or delegation[:2] != (client, owner)
+                or grant[:4] != (client, owner, delegation_id, jti)):
+            raise ValueError("Inconsistent bundle records")
+        if revoked or delegation[2] or grant[4]:
+            print("OWNER_BUNDLE_REVOKED")
+            return 1
+        if not float(delegation[3]) > now:
+            print("OWNER_BUNDLE_EXPIRED")
+            return 1
+    except (OSError, ValueError, KeyError, TypeError, OverflowError, sqlite3.Error):
+        print("OWNER_BUNDLE_UNVERIFIED")
+        return 1
+    print("OWNER_BUNDLE_LOCAL_RECORDS_NOT_REVOKED")
+    return 0
+
+
 def cmd_rehearse_rollback(args: argparse.Namespace) -> int:
     """Execute deterministic staging rollback rehearsal (Workstream C2) without git checkout."""
     from fastapi.testclient import TestClient
@@ -1136,6 +1200,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_rev_installed = sub.add_parser("revoke-installed-owner", help="Revoke the existing local installed owner bundle")
     p_rev_installed.add_argument("--bundle-file", required=True)
 
+    p_check_installed = sub.add_parser("check-installed-owner", help="Inspect local owner bundle revocation status without changing state")
+    p_check_installed.add_argument("--bundle-file", required=True)
+
     sub.add_parser("rehearse-rollback", help="Run isolated staging rollback rehearsal without git checkout (C2)")
 
     p_cut = sub.add_parser("cutover", help="Execute guarded production cutover for port 8768 (D1/D2)")
@@ -1164,6 +1231,8 @@ def main() -> int:
         return cmd_revoke_delegation(args)
     if args.command == "revoke-installed-owner":
         return cmd_revoke_installed_owner(args)
+    if args.command == "check-installed-owner":
+        return cmd_check_installed_owner(args)
     if args.command == "rehearse-rollback":
         return cmd_rehearse_rollback(args)
     if args.command == "cutover":
