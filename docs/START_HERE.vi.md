@@ -1,29 +1,55 @@
-# WinOwner MCP v1.2.0 — hướng dẫn người mới
+# WinOwner MCP — bắt đầu
 
-## Bước 1 — Cài trong CMD
+**Bản v1.2.0 đang phát triển, chưa được phát hành chính thức.**
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
+## 1. Cài đặt
 
-Chỉ sử dụng khi tag v1.2.0 đã phát hành và được xác minh. **THÀNH CÔNG** = dịch vụ read_only chạy; **THẤT BẠI** = đọc thông báo CMD. Không tắt SmartScreen/Defender.
+Sau khi v1.2.0 được phát hành và xác minh, mở CMD, kiểm tra nguồn bộ cài rồi dùng lệnh được công bố:
 
-Nhấn **Win + R**, mở:
+```cmd
+powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
+```
 
-    %LOCALAPPDATA%\WinOwnerMCP\v1.2.0
+Nhấn **Win + R**, mở thư mục `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`.
 
-## Bước 2 — Nhấp để kết nối
+Chạy `Check-WinOwner.cmd`. **THÀNH CÔNG**: dịch vụ trên máy sẵn sàng. **THẤT BẠI**: xem thông báo lỗi. Không cần tắt phần mềm bảo mật.
 
-`Check-WinOwner.cmd` kiểm tra dịch vụ trên máy. `Connect-ChatGPT.cmd` là trình cấu hình tunnel; chỉ sử dụng tunnel của tài khoản/workspace được phép truy cập.
+## 2. Kết nối riêng
 
-## Bước 3 — Tạo plugin
+Đọc [hướng dẫn Secure MCP Tunnel của OpenAI](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). Chỉ sử dụng tài khoản và workspace được phép kết nối.
 
-Xem [hướng dẫn kết nối](CONNECT_CHATGPT.md). Authentication None vẫn cần xác thực phía WinOwner; HTTP 401 từ request chưa xác thực là đúng. Không bỏ lớp xác thực để khắc phục lỗi.
+```mermaid
+flowchart LR
+  A["Tunnel ID<br/>Mã định danh"] --> C["Kết nối riêng"]
+  B["Runtime API key<br/>Khóa xác thực"] --> C
+```
 
-Phân biệt `CHECK_PASS` (dịch vụ trên máy), `TUNNEL_READY` (tunnel sẵn sàng) và kết nối thực tế (ChatGPT gọi thành công tool chỉ đọc). Nếu không thấy mục custom MCP, kiểm tra quyền tài khoản/workspace.
+*Hình trên là sơ đồ minh họa, không phải ảnh chụp giao diện.*
 
-## Bước 4 — Quyền owner (tùy chọn)
+Hai giá trị này có mục đích khác nhau; không phải hai API key. Tiện ích hiện có là `Connect-ChatGPT.cmd`. Không chia sẻ khóa hoặc ảnh màn hình chứa khóa.
 
-Read-only là mặc định. Quyền owner cần xác minh OAuth, cấp quyền riêng và nghiệm thu thu hồi quyền. Không chia sẻ credential; không dán khóa vào chat. Các tiện ích quản trị không cần thiết cho cài đặt chỉ đọc.
+## 3. Plugin ChatGPT
 
-`Uninstall-WinOwner.cmd` kiểm tra và gỡ task dịch vụ/tunnel đã xác minh, giữ nguyên file và khóa. Thu hồi quyền plugin/tunnel riêng. Khi nâng cấp, giữ bản cũ đến khi kiểm tra xong kết nối mới.
+Xem [hướng dẫn thêm custom MCP server của OpenAI](https://developers.openai.com/api/docs/guides/custom-mcp-server). Kiểm tra thông tin plugin và quyền truy cập được yêu cầu. Giữ chế độ chỉ đọc để nghiệm thu.
 
-Xem [Authentication None](AUTH_NONE.vi.md) hoặc [hướng dẫn kỹ thuật](ADVANCED_CHATGPT.vi.md).
+Authentication None không có nghĩa là bỏ xác thực phía máy; HTTP 401 có thể xuất hiện khi chưa được cấp quyền. Ghép nối owner qua OAuth là luồng riêng, chưa nghiệm thu thực tế.
+
+## 4. Kiểm tra kết nối
+
+| Kết quả | Ý nghĩa |
+|---|---|
+| CHECK_PASS | Máy Windows sẵn sàng |
+| TUNNEL_READY | Đường kết nối sẵn sàng |
+| ChatGPT trả kết quả từ tác vụ đọc thử | Kết nối được kiểm tra thực tế |
+
+```mermaid
+flowchart LR
+  A["Máy sẵn sàng"] --> B["Tunnel sẵn sàng"]
+  B --> C["ChatGPT gọi tác vụ đọc"]
+```
+
+## Ngắt kết nối
+
+`Disconnect-ChatGPT.cmd` ngắt tunnel cục bộ; `Uninstall-WinOwner.cmd` dừng và gỡ dịch vụ đã xác minh. Thu hồi quyền từ tài khoản riêng khi cần. Không tự chuyển Full Control chỉ để sửa lỗi kết nối.
+
+[Tài liệu kỹ thuật](ADVANCED_CHATGPT.vi.md) · [Sửa lỗi](TROUBLESHOOTING.md) · [Bảo mật](../SECURITY.md)
