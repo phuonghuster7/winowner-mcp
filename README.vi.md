@@ -1,45 +1,39 @@
-# WinOwner MCP v1.2.0 — kết nối Windows với ChatGPT
+# WinOwner MCP v1.2.0
 
-**Windows 10/11 · Cài bằng một lệnh CMD · Mặc định chỉ đọc.**
+Kết nối máy Windows 10/11 của bạn với ChatGPT để thực hiện tác vụ đọc đã được cho phép.
 
-Hướng dẫn dành cho v1.2.0. Chỉ dùng lệnh cài sau khi phiên bản này được phát hành và xác minh.
+[English](README.md) · [Hướng dẫn kỹ thuật](docs/ADVANCED_CHATGPT.vi.md)
 
-## 1. Cài trên Windows 10/11
+> Bản đang phát triển. Chưa phát hành bộ cài v1.2.0 để sử dụng chính thức.
 
-Mở CMD và dùng lệnh cài đã ghim phiên bản từ bản phát hành được xác minh:
+```mermaid
+flowchart TD
+  A["1 · Cài WinOwner"] --> B["2 · Kết nối riêng"]
+  B --> C["3 · Thêm plugin ChatGPT"]
+  C --> D["4 · Kiểm tra chỉ đọc"]
+```
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
+## 1. Cài đặt
+Khi bản v1.2.0 đã phát hành và được xác minh, mở CMD, kiểm tra nguồn bộ cài trước khi dùng lệnh:
+```cmd
+powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
+```
+Mở thư mục `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`, chạy `Check-WinOwner.cmd`.
 
-Thư mục cài: `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`. Không cần Git. Không tắt phần mềm bảo mật để cài đặt.
+## 2. Kết nối riêng
+Xem [hướng dẫn Secure MCP Tunnel chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). Cần phân biệt **Tunnel ID** (mã đường kết nối) và **runtime API key** (khóa xác thực). Tiện ích cấu hình hiện có: `Connect-ChatGPT.cmd`. Không gửi khóa qua chat.
 
+## 3. Tạo plugin ChatGPT
+Xem [hướng dẫn tạo plugin của OpenAI](https://developers.openai.com/api/docs/guides/custom-mcp-server). Kiểm tra quyền được yêu cầu, giữ chế độ chỉ đọc ban đầu. Authentication không thay thế xác minh chủ máy.
 
+## 4. Kiểm tra kết nối
+Máy hoạt động ≠ tunnel sẵn sàng ≠ ChatGPT kết nối thành công. Kiểm tra bằng một tác vụ đọc không nhạy cảm.
 
-## 2. Kiểm tra và kết nối ChatGPT
+## Quản lý
+- `Disconnect-ChatGPT.cmd`: ngắt tunnel đã xác minh.
+- `Uninstall-WinOwner.cmd`: dừng và gỡ dịch vụ.
+- [Quản trị nâng cao](docs/ADVANCED_CHATGPT.vi.md): Show-OwnerKey và các tiện ích quản trị không thuộc luồng cài đặt ban đầu. Ghép nối owner và thu hồi quyền cần nghiệm thu riêng.
 
-Nhấn Win + R, mở:
+[Hướng dẫn người mới](docs/START_HERE.vi.md) · [Cài đặt và sửa lỗi](docs/INSTALLATION.md) · [Bảo mật](SECURITY.md)
 
-    %LOCALAPPDATA%\WinOwnerMCP\v1.2.0
-
-`Check-WinOwner.cmd` kiểm tra dịch vụ cục bộ. `Connect-ChatGPT.cmd` hướng dẫn cấu hình tunnel riêng, kiểm hash bộ tunnel-client và kiểm tra trạng thái sẵn sàng.
-
-Xem [hướng dẫn kết nối](docs/START_HERE.vi.md). Tài khoản/workspace cần có quyền thêm MCP. Authentication: None không có nghĩa là bỏ xác thực Windows.
-
-| Kết quả | Ý nghĩa |
-| --- | --- |
-| `LOCAL_INSTALL_PASS` / `CHECK_PASS` | Dịch vụ trên máy hoạt động |
-| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Tunnel sẵn sàng, chưa xác nhận ChatGPT |
-| ChatGPT gọi thành công tool chỉ đọc | Kết nối thực tế đã được xác minh |
-
-## 3. Nếu cần Full Control
-
-Giữ chế độ chỉ đọc làm mặc định. Quyền owner cần xác minh danh tính, sự đồng ý rõ ràng và phân quyền riêng. `Grant-OwnerAccess.cmd` và `Show-OwnerKey.cmd` là tiện ích quản trị nhạy cảm, không cần cho chế độ chỉ đọc. Không chia sẻ khóa riêng hoặc dán khóa vào chat. Cần nghiệm thu riêng luồng cấp và thu hồi quyền. Chạy `Revoke-OwnerAccess.cmd` để thu hồi token owner đã lưu và các grant liên quan. Không thay đổi profile, credential khác, tác vụ đang chạy hoặc file bundle.
-
-## 4. Dừng và gỡ
-
-`Uninstall-WinOwner.cmd` kiểm tra và gỡ task dịch vụ và tunnel đã xác minh; giữ lại cấu hình và khóa riêng. Thu hồi quyền plugin/tunnel từ tài khoản riêng. `Disconnect-ChatGPT.cmd` chỉ ngắt tunnel đã xác minh, giữ nguyên dịch vụ MCP và cấu hình. Chưa có rollback tự động khi đổi tunnel.
-
-Chạy lại cùng phiên bản để sửa cài đặt; nâng cấp giữ thư mục cũ. Có thể cần kiểm tra lại kết nối ChatGPT. Xem [nâng cấp và sửa lỗi](docs/INSTALLATION.md).
-
-[Hướng dẫn ngắn](docs/START_HERE.vi.md) · [Authentication None](docs/AUTH_NONE.vi.md) · [Bảo mật](SECURITY.md) · [English](README.md)
-
-MIT, độc lập với OpenAI và Microsoft.
+MIT · Dự án độc lập với OpenAI và Microsoft.
