@@ -1,39 +1,37 @@
-# WinOwner MCP v1.2.0 — private Windows MCP for ChatGPT
+# WinOwner MCP v1.2.0
 
-**Windows 10/11 · One CMD installer · Read-only by default.**
+Connect your own Windows 10/11 computer to ChatGPT for approved, read-only tasks.
 
-This guide describes v1.2.0. Use the pinned installer only after that release is published and verified.
+[Tiếng Việt](README.vi.md) · [Technical documentation](docs/CONNECT_CHATGPT.md)
 
-## 1. Install
+> Development preview. The v1.2.0 installer is not yet published or verified for everyday use.
 
-Open Windows CMD. Use the version-pinned installer from the verified release:
+```mermaid
+flowchart LR
+  A["1 · Install"] --> B["2 · Private connection"] --> C["3 · ChatGPT plugin"] --> D["4 · Verify read-only"]
+```
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
+## 1 · Install
+After the verified v1.2.0 release is available, open CMD and review the published installer before running the documented command:
+```cmd
+powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
+```
+The install folder is `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`. Open it and run `Check-WinOwner.cmd`.
 
-The local installation is in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`. Git is not required. Do not disable security software to install.
+## 2 · Private connection
+Use your authorized organization's [official Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). The two values are a **Tunnel ID** and a **runtime API key**, not two API keys. The existing local setup utility is `Connect-ChatGPT.cmd`. Do not share keys.
 
-## 2. Connect ChatGPT
+## 3 · ChatGPT plugin
+Follow the [official custom MCP server guide](https://developers.openai.com/api/docs/guides/custom-mcp-server). Review the requested access and keep the initial connection read-only. Authentication settings alone do not establish owner identity.
 
-Open the installation directory. `Check-WinOwner.cmd` reports local service health. `Connect-ChatGPT.cmd` guides private tunnel configuration; the tool itself verifies the pinned tunnel-client package and checks readiness.
+## 4 · Check that it works
+Local check passed ≠ tunnel ready ≠ ChatGPT connected. Confirm with a harmless read-only test. Do not enable access you do not need.
 
-Use the [connection guide](docs/CONNECT_CHATGPT.md) with an account/workspace permitted to add custom MCP servers. Authentication: None is not anonymous Windows access. Use a read-only status check to verify the actual connection.
+## Manage
+- `Disconnect-ChatGPT.cmd`: disconnect the verified local tunnel.
+- `Uninstall-WinOwner.cmd`: stop/remove the verified service and tunnel.
+- [Advanced administration](docs/ADVANCED_CHATGPT.vi.md): Grant-OwnerAccess and other sensitive administrative facilities are not part of initial setup. Revocation and owner pairing need separate verification.
 
-| Result | Meaning |
-| --- | --- |
-| `LOCAL_INSTALL_PASS` / `CHECK_PASS` | Local service healthy |
-| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Tunnel readiness verified; ChatGPT not yet verified |
-| Successful read-only tool call from ChatGPT | Actual connection verified |
+[Installation and repair](docs/INSTALLATION.md) · [Security](SECURITY.md) · [Quick guide](docs/START_HERE.vi.md)
 
-## 3. Owner permissions
-
-Keep read-only as the default. Owner access requires separate verified identity, explicit consent and scoped delegation. `Grant-OwnerAccess.cmd` and `Show-OwnerKey.cmd` are sensitive administrative utilities, not required for read-only setup. Never share or paste private credentials into chat. Owner pairing and revocation require separate acceptance testing. To revoke an existing installed owner bundle and its linked grants locally, run `Revoke-OwnerAccess.cmd`. This does not terminate unrelated OAuth credentials or active jobs, change the service profile, or remove the local bundle. Do not reuse the revoked key.
-
-## 4. Stop and revoke
-
-`Uninstall-WinOwner.cmd` checks/removes the local service and verified tunnel scheduled task, preserving configuration and secrets. Revoke remote plugin/tunnel access separately. `Disconnect-ChatGPT.cmd` removes the verified tunnel task without stopping the local MCP service. It preserves existing configuration, but automatic reconfiguration rollback is not yet implemented.
-
-Rerunning the same version repairs that installation; side-by-side upgrades keep the previous folder. Remote pairing may need to be checked again. See [upgrade and repair](docs/INSTALLATION.md).
-
-[Quick guide](docs/START_HERE.vi.md) · [Authentication None](docs/AUTH_NONE.vi.md) · [Security](SECURITY.md) · [Vietnamese](README.vi.md)
-
-MIT licensed, independent of OpenAI and Microsoft.
+MIT licensed; independent of OpenAI and Microsoft.
