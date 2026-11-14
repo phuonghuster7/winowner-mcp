@@ -11,6 +11,7 @@ param(
     [switch]$NoPythonInstall,
     [switch]$OwnerFullControl,
     [switch]$Remove,
+    [switch]$DisconnectTunnel,
     [ValidateRange(1024,65535)][int]$Port = 8768
 )
 Set-StrictMode -Version Latest
@@ -101,8 +102,41 @@ function Stop-VerifiedLocalListener {
         Stop-Process -Id $listener.OwningProcess -Force -ErrorAction Stop
     }
 }
+if ($DisconnectTunnel -and -not $Remove) { throw 'DisconnectTunnel requires Remove.' }
 if ($Remove) {
     $task = Managed-Task
+    if ($DisconnectTunnel) {
+        # Explicit uninstall only; upgrade and profile changes use Remove alone.
+        $tunnelTaskName = "WinOwnerTunnel-$Port"
+        $tunnelTask = Get-ScheduledTask -TaskName $tunnelTaskName -TaskPath '\' -ErrorAction SilentlyContinue
+        if ($tunnelTask) {
+            $tunnelAction = @($tunnelTask.Actions)
+            $tunnelRunner = Join-Path $PSScriptRoot "Run-WinOwnerTunnel.ps1"
+            $expectedArgs = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$tunnelRunner+'"'
+            if ($tunnelAction.Count -ne 1 -or
+                $tunnelAction[0].Execute -ne (Join-Path $PSHOME 'powershell.exe') -or
+                $tunnelAction[0].Arguments -ne $expectedArgs -or
+                $tunnelAction[0].WorkingDirectory -ne $root -or
+                @($identity, $env:USERNAME, ("$env:USERDOMAIN\$env:USERNAME")) -notcontains $tunnelTask.Principal.UserId) {
+                throw "Task name collision for $tunnelTaskName; refusing to modify another task."
+            }
+            Stop-ScheduledTask -TaskName $tunnelTaskName -TaskPath '\' -ErrorAction SilentlyContinue
+            $until = [DateTime]::UtcNow.AddSeconds(10)
+            do {
+                $state = (Get-ScheduledTask -TaskName $tunnelTaskName -TaskPath '\' -ErrorAction Stop).State
+                if ($state -notin @('Running','Queued')) { break }
+                Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $until)
+            if ($state -in @('Running','Queued')) { throw 'Tunnel task did not stop; no tunnel removal was reported.' }
+            Unregister-ScheduledTask -TaskName $tunnelTaskName -TaskPath '\' -Confirm:$false -ErrorAction Stop
+            if (Get-ScheduledTask -TaskName $tunnelTaskName -TaskPath '\' -ErrorAction SilentlyContinue) {
+                throw 'Tunnel task removal could not be verified.'
+            }
+            Step "TUNNEL_TASK_REMOVED: $tunnelTaskName. Revoke remote access separately if required."
+        } else {
+            Step "TUNNEL_TASK_NOT_FOUND: $tunnelTaskName"
+        }
+    }
     if ($task) {
         Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop

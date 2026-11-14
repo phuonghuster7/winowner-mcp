@@ -212,6 +212,85 @@ def test_grant_missing_install_refuses_without_dialog(tmp_path: Path) -> None:
     assert "OWNER_GRANT_CREATED" not in result.stdout
 
 
+def test_tunnel_status_and_explicit_uninstall_contract() -> None:
+    uninstall = (ROOT / "Uninstall-WinOwner.cmd").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "scripts" / "Bootstrap-WindowsMcp.ps1").read_text(encoding="utf-8")
+    check = (ROOT / "scripts" / "Check-WinOwner.ps1").read_text(encoding="utf-8")
+    assert "-Remove -DisconnectTunnel" in uninstall
+    assert "DisconnectTunnel requires Remove" in bootstrap
+    assert "if ($DisconnectTunnel)" in bootstrap
+    assert "Task name collision for $tunnelTaskName" in bootstrap
+    assert "Tunnel task did not stop" in bootstrap
+    assert "Tunnel task removal could not be verified" in bootstrap
+    assert "TUNNEL_TASK_REMOVED" in bootstrap
+    for state in ("TUNNEL_NOT_CONFIGURED", "TUNNEL_UNVERIFIED", "TUNNEL_NOT_RUNNING",
+                  "TUNNEL_NOT_READY", "TUNNEL_READY"):
+        assert state in check
+    assert "MaximumRedirection 0" in check
+    assert "does NOT verify that ChatGPT account pairing is complete" in check
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell only")
+@pytest.mark.parametrize("collision", [False, True])
+def test_tunnel_uninstall_checks_exact_task_before_removing(tmp_path: Path, collision: bool) -> None:
+    # Mock every scheduled-task mutation: never touch a real tunnel or task.
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "Bootstrap-WindowsMcp.ps1"
+    script.write_bytes((ROOT / "scripts" / script.name).read_bytes())
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    harness = tmp_path / "harness.ps1"
+    harness.write_text(r"""
+param([string]$Root, [int]$Port, [int]$Collision)
+$global:WinOwnerFixtureRemoved=$false
+$global:WinOwnerFixturePort=$Port
+$global:WinOwnerFixtureRoot=$Root
+$global:WinOwnerFixtureCollision=$Collision
+$global:WinOwnerFixtureStopped=$false
+function global:Get-ScheduledTask {
+    [CmdletBinding()] param([string]$TaskName,[string]$TaskPath)
+    if ($TaskName -ne "WinOwnerTunnel-$global:WinOwnerFixturePort" -or $global:WinOwnerFixtureRemoved) {return}
+    $runner=Join-Path $global:WinOwnerFixtureRoot 'scripts\Run-WinOwnerTunnel.ps1'
+    $arguments='-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$runner+'"'
+    $wd=if($global:WinOwnerFixtureCollision){Join-Path $global:WinOwnerFixtureRoot 'other-install'}else{$global:WinOwnerFixtureRoot}
+    [PSCustomObject]@{
+        Actions=@([PSCustomObject]@{Execute=(Join-Path $PSHOME 'powershell.exe');Arguments=$arguments;WorkingDirectory=$wd})
+        Principal=[PSCustomObject]@{UserId=[Security.Principal.WindowsIdentity]::GetCurrent().Name}
+        State=if($global:WinOwnerFixtureStopped){'Ready'}else{'Running'}
+    }
+}
+function global:Stop-ScheduledTask {
+    [CmdletBinding()] param([string]$TaskName,[string]$TaskPath)
+    if($TaskName -ne "WinOwnerTunnel-$global:WinOwnerFixturePort"){throw 'unexpected task'}
+    Write-Host 'MOCK_STOP'; $global:WinOwnerFixtureStopped=$true
+}
+function global:Unregister-ScheduledTask {
+    [CmdletBinding(SupportsShouldProcess=$true)] param([string]$TaskName,[string]$TaskPath)
+    if($TaskName -ne "WinOwnerTunnel-$global:WinOwnerFixturePort"){throw 'unexpected task'}
+    Write-Host 'MOCK_UNREGISTER'; $global:WinOwnerFixtureRemoved=$true
+}
+$ErrorActionPreference='Stop'
+& (Join-Path $Root 'scripts\Bootstrap-WindowsMcp.ps1') -Remove -DisconnectTunnel -Port $Port
+exit $LASTEXITCODE
+""", encoding="utf-8")
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-File", str(harness), "-Root", str(tmp_path),
+         "-Port", str(port), "-Collision", str(int(collision))],
+        cwd=tmp_path, capture_output=True, text=True, timeout=18,
+    )
+    output = result.stdout + result.stderr
+    if collision:
+        assert result.returncode != 0
+        assert "Task name collision" in output
+        assert "MOCK_STOP" not in output and "MOCK_UNREGISTER" not in output
+    else:
+        assert result.returncode == 0, output
+        assert "MOCK_STOP" in output and "MOCK_UNREGISTER" in output
+        assert "TUNNEL_TASK_REMOVED" in output
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows ZIP builder only")
 def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
     cmd = [

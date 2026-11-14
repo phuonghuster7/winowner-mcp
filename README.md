@@ -22,7 +22,7 @@ Authentication None does not mean anonymous access to Windows. The backend requi
 
 ## 4. Stop and revoke
 
-Uninstall-WinOwner.cmd unregisters the local service but preserves configuration and secrets. Revoke the corresponding remote ChatGPT plugin and tunnel access separately.
+Check-WinOwner.cmd reports the local service and tunnel readiness separately. Uninstall-WinOwner.cmd checks/removes the local service and verified tunnel scheduled task, preserving configuration and secrets. Revoke the corresponding remote ChatGPT plugin and tunnel access separately.
 
 [Quick guide](docs/START_HERE.vi.md) · [Authentication None](docs/AUTH_NONE.vi.md) · [Security](SECURITY.md) · [Vietnamese](README.vi.md)
 
