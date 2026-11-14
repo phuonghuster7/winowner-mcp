@@ -4,15 +4,13 @@ Connect your own Windows 10/11 computer to ChatGPT for approved, read-only tasks
 
 [Tiếng Việt](README.vi.md) · [Technical documentation](docs/CONNECT_CHATGPT.md)
 
-> Development preview. The v1.2.0 installer is not yet published or verified for everyday use.
-
 ```mermaid
 flowchart LR
   A["1 · Install"] --> B["2 · Private connection"] --> C["3 · ChatGPT plugin"] --> D["4 · Verify read-only"]
 ```
 
 ## 1 · Install
-After the verified v1.2.0 release is available, open CMD and review the published installer before running the documented command:
+Check [Releases](https://github.com/phuonghuster7/winowner-mcp/releases) first. The command below requires the v1.2.0 release tag; review the installer before running it in CMD.
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
