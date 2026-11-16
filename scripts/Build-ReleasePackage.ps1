@@ -64,6 +64,8 @@ $moduleSpecs = @(
     @{ Dir = "config";        Exts = @(".json", ".yaml"); ExampleOnly = $true },
     @{ Dir = "scripts";       Exts = @(".ps1", ".py") },
     @{ Dir = "docs";          Exts = @(".md") },
+    # Repository-owned text diagrams only; binary screenshots require separate review.
+    @{ Dir = "docs\assets";   Exts = @(".svg"); ApprovedNames = @("guide-01-en.svg", "guide-02-en.svg", "guide-03-en.svg", "demo-readonly-en.svg", "guide-01-vi.svg", "guide-02-vi.svg", "guide-03-vi.svg", "demo-readonly-vi.svg") },
     @{ Dir = "tests";         Exts = @(".py") }
 )
 
@@ -73,6 +75,8 @@ foreach ($spec in $moduleSpecs) {
         Get-ChildItem -Path $dirPath -File | Where-Object {
             $extMatch = $_.Extension -in $spec.Exts
             if (-not $extMatch) { return $false }
+            if ($spec.ContainsKey("ApprovedNames") -and $_.Name -notin $spec.ApprovedNames) { return $false }
+            if ($spec.ContainsKey("ApprovedNames") -and ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Documentation asset must not be a reparse point: $($_.Name)" }
             if ($spec.ContainsKey("ExampleOnly") -and $spec.ExampleOnly) {
                 return ($_.Name -like "*.example.json" -or $_.Name -like "*.example.yaml")
             }
