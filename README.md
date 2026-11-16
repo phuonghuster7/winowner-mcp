@@ -64,11 +64,33 @@ The installer automatically checks local health and authentication. A successful
 
 > Release availability: the v1.2.0 tag must be published before this command works. [Release downloads](https://github.com/phuonghuster7/winowner-mcp/releases).
 
-### 2 · Private connection
-Use your authorized organization's [official Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). The two values are a **Tunnel ID** and a **runtime API key**, not two API keys. The existing local setup utility is `Connect-ChatGPT.cmd`. Do not share keys.
+### 2 · Prepare the private connection
 
-### 3 · ChatGPT plugin
-Follow the [official custom MCP server guide](https://developers.openai.com/plugins/deploy/connect-chatgpt). Review the requested access and keep the initial connection read-only. Authentication settings alone do not establish owner identity.
+For an authorized read-only setup, use the following official screens. Choose the organization and workspace you are permitted to use.
+
+**A. Tunnel ID** — [Open Tunnels](https://platform.openai.com/settings/organization/tunnels). Select **Create tunnel** and use the intended organization/workspace. The identifier is displayed in the tunnel list.
+
+[![Official tunnel creation screen](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/tunnel-create-modal.png)](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/tunnel-create-modal.png)
+
+*Source: [OpenAI tunnel-client guide](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md).*
+
+**B. Runtime API key** — [Open API keys](https://platform.openai.com/settings/organization/api-keys). Select **Create new secret key**; use a restricted key with the required tunnel permissions, not an admin key. See the [official permission requirements](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+
+[![Official restricted API key dialog](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)
+
+*Source: [OpenAI Help Center](https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform). This example shows Restricted, not the tunnel-specific permission fields.*
+
+The local setup utility is `Connect-ChatGPT.cmd`. Keep the key private and do not include it in screenshots or chat.
+
+### 3 · Add a private ChatGPT plugin
+
+Open [ChatGPT](https://chatgpt.com/#settings/Connectors) and locate **Plugins → Add custom MCP server** for an account/workspace with permission. The official interface below shows the **Tunnel** connection selector. Review its authentication requirements and requested access, and retain the read-only setup.
+
+[![Official ChatGPT tunnel selector](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)
+
+*Source: [OpenAI tunnel-client guide](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md). This screenshot shows OAuth; the interface and available authentication methods can vary. Authentication settings do not establish owner identity.*
+
+[Official plugin setup reference](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
 ### 4 · Check that it works
 Local check passed ≠ tunnel ready ≠ ChatGPT connected. Confirm with a harmless read-only test. Do not enable access you do not need.
