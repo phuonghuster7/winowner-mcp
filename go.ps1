@@ -159,10 +159,11 @@ try {
     & $checkFile -Port $Port
     if ($LASTEXITCODE -ne 0) { throw 'Post-install local health/auth verification failed.' }
     Write-Host ''
-    Write-Host '[THANH CONG] WinOwner MCP da cai dat tren Windows.' -ForegroundColor Green
-    Write-Host "Kiem tra: $InstallRoot\Check-WinOwner.cmd"
-    Write-Host "Huong dan: $InstallRoot\docs\START_HERE.vi.md"
-    Write-Host 'ChatGPT: chua ket noi; can tunnel bao ve va quyen owner cho cac tool dac quyen.'
+    Write-Host '[SUCCESS] WinOwner MCP is installed and local checks passed.' -ForegroundColor Green
+    Write-Host "Troubleshooting (only if needed): $InstallRoot\Check-WinOwner.cmd"
+    Write-Host "English guide: $InstallRoot\README.md"
+    Write-Host "Vietnamese guide: $InstallRoot\README.vi.md"
+    Write-Host 'ChatGPT: not connected yet. See the connection guide; privileged tools require separate owner authorization.'
 } catch {
     if ($legacyStopped) {
         Write-Warning 'New install failed. Attempting verified rollback to previous version.'
@@ -194,9 +195,9 @@ try {
             Write-Host 'ROLLBACK_VERIFIED: previous local service restored; remote pairing not verified.'
         } catch { Write-Warning 'ROLLBACK_INCOMPLETE: previous files remain for manual recovery; check local service before reconnecting.' }
     }
-    Write-Host ('[THAT BAI] ' + $_.Exception.Message) -ForegroundColor Red
+    Write-Host ('[FAILED] ' + $_.Exception.Message) -ForegroundColor Red
     if ($env:WINOWNER_DEBUG -eq '1') { Write-Host ('DEBUG: ' + $_.ScriptStackTrace) }
-    Write-Host 'Khong tu cap quyen, khong xoa file/dich vu da co.'
+    Write-Host 'No new owner authorization was granted. See the error and any rollback status above.'
     exit 1
 } finally {
     if ($tempDir -and (Test-Path -LiteralPath $tempDir)) {
