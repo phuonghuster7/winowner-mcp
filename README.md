@@ -124,6 +124,8 @@ The cloud catalog contains **14 baseline tools, up to 34 for eligible owner sess
 
 The server defaults to read-only. A listed tool is not necessarily authorized to execute. Tunnel credentials are not proof of owner identity. Windows access controls still apply, and privileged execution is not an OS sandbox. See [Security](SECURITY.md) and the [permission model](docs/CAPABILITIES.md).
 
+For ChatGPT permission prompts, `Allow all tools` is **optional**, is not required to connect, and does **not** grant owner privileges; it carries elevated risk. Keep the initial read-only experience and review approvals for sensitive actions. [OpenAI permission reference](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt).
+
 ## Manage
 - `Disconnect-ChatGPT.cmd`: disconnect the verified local tunnel.
 - `Uninstall-WinOwner.cmd`: stop/remove the verified service and tunnel.
