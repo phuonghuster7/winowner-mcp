@@ -33,6 +33,23 @@ def test_release_version_alignment() -> None:
     assert f"targets **{version}**" in (ROOT / "SECURITY.md").read_text(encoding="utf-8")
 
 
+def test_release_version_alignment_runtime_and_installers() -> None:
+    version = _source_release_version()
+    for relative in ("Install-WinOwner.cmd", "scripts/Setup-WinOwner.ps1", "docs/INSTALLATION.md"):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert f"WinOwner MCP {version}" in text, relative
+    builder = (ROOT / "scripts/Build-ReleasePackage.ps1").read_text(encoding="utf-8")
+    assert f'[string]$Version = "{version}"' in builder
+    # Exercise the manifest-free fallback independently of local release evidence.
+    import runpy
+    from tempfile import TemporaryDirectory
+    namespace = runpy.run_path(str(ROOT / "runtime/release_identity.py"))
+    get_identity = namespace["get_release_identity"]
+    with TemporaryDirectory() as directory:
+        get_identity.__globals__["PROJECT_ROOT"] = Path(directory)
+        assert get_identity()["release_version"] == version
+
+
 def test_documentation_assets_are_in_package_allowlist() -> None:
     builder = (ROOT / "scripts" / "Build-ReleasePackage.ps1").read_text(encoding="utf-8")
     assert 'Dir = "docs\\assets"' in builder

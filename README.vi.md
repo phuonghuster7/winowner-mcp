@@ -94,6 +94,8 @@ Thiết lập Authentication phải phù hợp với cấu hình server đã xá
 
 Xem các lựa chọn phê duyệt. `Allow all tools` giảm yêu cầu xác nhận, tăng rủi ro và không cấp quyền owner. Nên giữ xác nhận riêng với thao tác nhạy cảm. [Tài liệu phân quyền](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt).
 
+Thiết lập phê duyệt của ChatGPT quyết định khi nào ChatGPT hỏi trước khi gọi tool. Backend kiểm tra độc lập danh tính, phạm vi và chính sách cho từng yêu cầu. Chọn `Allow all tools` không bỏ qua kiểm tra backend và không cấp quyền owner.
+
 ### Kiểm tra kết nối
 
 | Kết quả | Phạm vi đã kiểm tra |

@@ -71,3 +71,9 @@ checks. Remote pairing remains a separate check.
 ## Maintainer release alignment
 
 Keep the version pinned to an explicitly reviewed release. When preparing a new release, update the installer default ref, display version, install directory, both READMEs, the beginner guide and `SECURITY.md` together. The onboarding tests check version drift and referenced documentation assets. Passing those checks is not proof that the GitHub tag exists or that a real Windows/ChatGPT connection has been accepted; verify both before publication. Do not silently download or execute unreviewed branch HEADs.
+
+### Release version gate
+
+Before preparing a release, run `python -m pytest -q tests/test_oneclick_onboarding.py`. The version pinned in `go.ps1` must match both READMEs, the beginner guide, security policy, installation guide, launcher, setup banner, package builder default and manifest-free runtime identity. Keep previous-version migration references intact.
+
+Run the same suite and `scripts/Build-ReleasePackage.ps1 -DryRun` on Windows CI. Inspect the built ZIP and both rendered READMEs, including every localized image. A green test run does not establish live ChatGPT acceptance. Publish the version tag and enable its installation instructions only after release acceptance; do not substitute a development branch URL for an unavailable release.

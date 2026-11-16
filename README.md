@@ -94,6 +94,8 @@ Authentication settings must match the verified server configuration. Keep the i
 
 Review the available approval settings. `Allow all tools` reduces confirmation prompts, carries elevated risk and does not grant owner access. Prefer confirmation for sensitive actions. [Permission reference](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt).
 
+ChatGPT approval settings control when ChatGPT asks permission to call a tool. Backend authorization independently checks identity, scope and policy for each request. Selecting `Allow all tools` does not bypass backend checks or enable owner privileges.
+
 ### Verify the connection
 
 | Result | What is verified |
