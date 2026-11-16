@@ -64,11 +64,33 @@ Bộ cài tự kiểm tra dịch vụ và xác thực trên máy. Khi cài đặ
 
 > Lệnh này chỉ hoạt động sau khi tag v1.2.0 được phát hành. [Các bản phát hành](https://github.com/phuonghuster7/winowner-mcp/releases).
 
-### 2. Kết nối riêng
-Xem [hướng dẫn Secure MCP Tunnel chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). Cần phân biệt **Tunnel ID** (mã đường kết nối) và **runtime API key** (khóa xác thực). Tiện ích cấu hình hiện có: `Connect-ChatGPT.cmd`. Không gửi khóa qua chat.
+### 2. Chuẩn bị kết nối riêng
 
-### 3. Tạo plugin ChatGPT
-Xem [hướng dẫn tạo plugin của OpenAI](https://developers.openai.com/plugins/deploy/connect-chatgpt). Kiểm tra quyền được yêu cầu, giữ chế độ chỉ đọc ban đầu. Authentication không thay thế xác minh chủ máy.
+Dùng các trang chính thức sau cho kết nối chỉ đọc đã được cấp phép. Chọn đúng tổ chức và workspace mà bạn có quyền sử dụng.
+
+**A. Tunnel ID** — [Mở trang Tunnels](https://platform.openai.com/settings/organization/tunnels). Chọn **Create tunnel**, chọn đúng tổ chức/workspace. Mã định danh xuất hiện trong danh sách tunnel.
+
+[![Giao diện tạo tunnel chính thức](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/tunnel-create-modal.png)](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/tunnel-create-modal.png)
+
+*Nguồn: [Tài liệu OpenAI tunnel-client](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md).*
+
+**B. Runtime API key** — [Mở trang API keys](https://platform.openai.com/settings/organization/api-keys). Chọn **Create new secret key**; sử dụng khóa giới hạn quyền cần thiết cho tunnel, không dùng admin key. Xem [điều kiện phân quyền chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+
+[![Giao diện tạo API key giới hạn quyền](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)
+
+*Nguồn: [OpenAI Help Center](https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform). Ảnh minh họa lựa chọn Restricted, chưa hiển thị riêng các trường quyền tunnel.*
+
+Tiện ích cấu hình cục bộ: `Connect-ChatGPT.cmd`. Không đưa khóa riêng vào ảnh chụp hoặc chat.
+
+### 3. Tạo plugin riêng trong ChatGPT
+
+Mở [ChatGPT](https://chatgpt.com/#settings/Connectors), tìm **Plugins → Add custom MCP server** trên tài khoản/workspace được phép. Ảnh chính thức bên dưới minh họa phần chọn kết nối **Tunnel**. Kiểm tra yêu cầu xác thực và phạm vi quyền; giữ cấu hình chỉ đọc ban đầu.
+
+[![Giao diện chọn tunnel trong ChatGPT](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)
+
+*Nguồn: [Tài liệu OpenAI tunnel-client](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md). Ảnh đang hiển thị OAuth; giao diện và phương thức xác thực có thể khác nhau. Thiết lập Authentication không xác minh danh tính chủ máy.*
+
+[Hướng dẫn plugin chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
 ### 4. Kiểm tra kết nối
 Máy hoạt động ≠ tunnel sẵn sàng ≠ ChatGPT kết nối thành công. Kiểm tra bằng một tác vụ đọc không nhạy cảm.
