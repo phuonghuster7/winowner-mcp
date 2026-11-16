@@ -56,13 +56,13 @@ Gateway cục bộ không được thiết kế để công khai ra Internet. Tu
 ## Cài đặt và kết nối
 
 ### 1. Cài đặt
-Mở Command Prompt (CMD) trên Windows. Lệnh cài đặt dành cho bản v1.2.0 đã phát hành:
+Mở Command Prompt (CMD) trên Windows.
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
-Bộ cài tự kiểm tra dịch vụ và xác thực trên máy. Khi cài đặt thành công, không cần chạy thêm bước kiểm tra thủ công.
+Bộ cài tự kiểm tra dịch vụ và xác thực trên máy.
 
-> Lệnh này chỉ hoạt động sau khi tag v1.2.0 được phát hành. [Các bản phát hành](https://github.com/phuonghuster7/winowner-mcp/releases).
+> Bản v1.2.0 chưa được phát hành. [Các bản phát hành](https://github.com/phuonghuster7/winowner-mcp/releases).
 
 ### 2. Chuẩn bị kết nối riêng
 
@@ -74,17 +74,19 @@ Dùng các trang chính thức sau cho kết nối chỉ đọc đã được c�
 
 *Nguồn: [Tài liệu OpenAI tunnel-client](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md).*
 
-**B. Runtime API key** — [Mở trang API keys](https://platform.openai.com/settings/organization/api-keys). Chọn **Create new secret key**; sử dụng khóa giới hạn quyền cần thiết cho tunnel, không dùng admin key. Xem [điều kiện phân quyền chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+**B. Runtime API key** — [Mở trang API keys](https://platform.openai.com/settings/organization/api-keys). Chọn **Create new secret key**; sử dụng khóa runtime giới hạn quyền cần thiết, không dùng admin key hoặc khóa toàn quyền. OpenAI phân biệt Tunnels Read + Use (runtime/người vận hành) với Read + Manage (quản trị tunnel). Xem [điều kiện phân quyền chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
 
 [![Giao diện tạo API key giới hạn quyền](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)
 
 *Nguồn: [OpenAI Help Center](https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform). Ảnh minh họa lựa chọn Restricted, chưa hiển thị riêng các trường quyền tunnel.*
 
+Tên minh họa thống nhất: `WinOwner MCP` cho tunnel và `WinOwner MCP Runtime` cho khóa. Tên hiển thị không cấp thêm quyền.
+
 Tiện ích cấu hình cục bộ: `Connect-ChatGPT.cmd`. Không đưa khóa riêng vào ảnh chụp hoặc chat.
 
 ### 3. Tạo plugin riêng trong ChatGPT
 
-Mở [ChatGPT](https://chatgpt.com/#settings/Connectors), tìm **Plugins → Add custom MCP server** trên tài khoản/workspace được phép. Ảnh chính thức bên dưới minh họa phần chọn kết nối **Tunnel**. Kiểm tra yêu cầu xác thực và phạm vi quyền; giữ cấu hình chỉ đọc ban đầu.
+Mở [ChatGPT](https://chatgpt.com/#settings/Connectors), tìm **Plugins → Add custom MCP server** trên tài khoản/workspace được phép. Ảnh chính thức bên dưới minh họa phần chọn kết nối **Tunnel**. Tên hiển thị đề xuất: **WinOwner MCP**. Mô tả: **Authorized Windows workspace inspection and task monitoring.** Chọn phương thức xác thực phù hợp với server, kiểm tra phạm vi quyền và giữ cấu hình chỉ đọc ban đầu.
 
 [![Giao diện chọn tunnel trong ChatGPT](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)
 
