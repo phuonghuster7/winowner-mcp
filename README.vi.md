@@ -2,7 +2,9 @@
 
 Kết nối máy Windows 10/11 của bạn với ChatGPT để thực hiện tác vụ đọc đã được cho phép.
 
-[English](README.md) · [Hướng dẫn kỹ thuật](docs/ADVANCED_CHATGPT.vi.md)
+[English](README.md) | **Tiếng Việt**
+
+[Hướng dẫn kỹ thuật](docs/ADVANCED_CHATGPT.vi.md)
 
 ```mermaid
 flowchart TD
@@ -12,11 +14,13 @@ flowchart TD
 ```
 
 ## 1. Cài đặt
-Kiểm tra [Releases](https://github.com/phuonghuster7/winowner-mcp/releases). Lệnh bên dưới cần tag v1.2.0; kiểm tra nguồn bộ cài trước khi chạy trong CMD.
+Mở Command Prompt (CMD) trên Windows. Lệnh cài đặt dành cho bản v1.2.0 đã phát hành:
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
-Mở thư mục `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`, chạy `Check-WinOwner.cmd`.
+Bộ cài tự kiểm tra dịch vụ và xác thực trên máy. Khi cài đặt thành công, không cần chạy thêm bước kiểm tra thủ công.
+
+> Lệnh này chỉ hoạt động sau khi tag v1.2.0 được phát hành. [Các bản phát hành](https://github.com/phuonghuster7/winowner-mcp/releases).
 
 ## 2. Kết nối riêng
 Xem [hướng dẫn Secure MCP Tunnel chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). Cần phân biệt **Tunnel ID** (mã đường kết nối) và **runtime API key** (khóa xác thực). Tiện ích cấu hình hiện có: `Connect-ChatGPT.cmd`. Không gửi khóa qua chat.
@@ -44,6 +48,8 @@ Danh mục cloud gồm **14 tool cơ bản, tối đa 34 tool khi đủ điều 
 - `Disconnect-ChatGPT.cmd`: ngắt tunnel đã xác minh.
 - `Uninstall-WinOwner.cmd`: dừng và gỡ dịch vụ.
 - [Quản trị nâng cao](docs/ADVANCED_CHATGPT.vi.md): Show-OwnerKey và các tiện ích quản trị không thuộc luồng cài đặt ban đầu. Ghép nối owner và thu hồi quyền cần nghiệm thu riêng.
+
+Chỉ khi cần xử lý lỗi, dùng `Check-WinOwner.cmd` trong `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`.
 
 [Hướng dẫn người mới](docs/START_HERE.vi.md) · [Cài đặt và sửa lỗi](docs/INSTALLATION.md) · [Bảo mật](SECURITY.md)
 
