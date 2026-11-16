@@ -27,6 +27,19 @@ Xem [hướng dẫn tạo plugin của OpenAI](https://developers.openai.com/api
 ## 4. Kiểm tra kết nối
 Máy hoạt động ≠ tunnel sẵn sàng ≠ ChatGPT kết nối thành công. Kiểm tra bằng một tác vụ đọc không nhạy cảm.
 
+## Chức năng & quyền truy cập
+
+Danh mục cloud gồm **14 tool cơ bản, tối đa 34 tool khi đủ điều kiện owner**. Mặc định chỉ đọc; việc xuất hiện tool không đồng nghĩa được phép thực thi.
+
+| Nhóm | Phạm vi |
+|---|---|
+| Tệp, workspace, Git | Đọc dữ liệu được phép; ghi cần quyền riêng |
+| Lập trình và kiểm thử | Thực thi cần cấp quyền riêng |
+| Tác vụ | Theo dõi, điều phối theo quyền |
+| Desktop và hệ thống | Quyền nhạy cảm, cần xác thực và cấp phép |
+
+[Xem danh sách 34 tool và mô hình quyền](docs/CAPABILITIES.md).
+
 ## Quản lý
 - `Disconnect-ChatGPT.cmd`: ngắt tunnel đã xác minh.
 - `Uninstall-WinOwner.cmd`: dừng và gỡ dịch vụ.
