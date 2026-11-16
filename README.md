@@ -55,7 +55,7 @@ The local gateway is not intended to be exposed publicly. The tunnel requires ou
 
 ## Quick start
 
-### 1 · Install
+### Install locally
 Open Windows Command Prompt (CMD).
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
@@ -64,38 +64,39 @@ The installer automatically verifies local health and authentication.
 
 > The v1.2.0 release is not yet published. [Release downloads](https://github.com/phuonghuster7/winowner-mcp/releases).
 
-### 2 · Prepare the private connection
+### Connect to ChatGPT
 
-For an authorized read-only setup, use the following official screens. Choose the organization and workspace you are permitted to use.
+Use an approved organization and workspace. The diagrams below are illustrations, not screenshots of the OpenAI interface.
 
-**A. Tunnel ID** — [Open Tunnels](https://platform.openai.com/settings/organization/tunnels). Select **Create tunnel** and use the intended organization/workspace. The identifier is displayed in the tunnel list.
+#### 1 · Runtime API key
 
-[![Official tunnel creation screen](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/tunnel-create-modal.png)](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/tunnel-create-modal.png)
+[OpenAI API keys](https://platform.openai.com/settings/organization/api-keys) · [Official tunnel requirements](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-*Source: [OpenAI tunnel-client guide](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md).*
+![Runtime API key: use only the necessary permissions and keep the key private](docs/assets/guide-01-en.svg)
 
-**B. Runtime API key** — [Open API keys](https://platform.openai.com/settings/organization/api-keys). Select **Create new secret key**; use a restricted runtime key with the necessary permissions, not an admin key or an unrestricted key. OpenAI distinguishes Tunnels Read + Use (runtime/operator access) from Read + Manage (tunnel administration). See the [official permission requirements](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+#### 2 · Private tunnel
 
-[![Official restricted API key dialog](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)
+[OpenAI Tunnels](https://platform.openai.com/settings/organization/tunnels) · [Official interface reference](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md)
 
-*Source: [OpenAI Help Center](https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform). This example shows Restricted, not the tunnel-specific permission fields.*
+![Private tunnel: use an approved organization and workspace](docs/assets/guide-02-en.svg)
 
-For documentation examples, use consistent resource labels such as `WinOwner MCP` for the tunnel and `WinOwner MCP Runtime` for the key. These names do not grant permissions.
+The local connection utility is `Connect-ChatGPT.cmd`. The runtime key and Tunnel ID have different purposes. Never share the key in chat or screenshots.
 
-The local setup utility is `Connect-ChatGPT.cmd`. Keep the key private and do not include it in screenshots or chat.
+#### 3 · ChatGPT plugin
 
-### 3 · Add a private ChatGPT plugin
+[ChatGPT plugins](https://chatgpt.com/plugins) · [Official connection guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-Open [ChatGPT](https://chatgpt.com/#settings/Connectors) and locate **Plugins → Add custom MCP server** for an account/workspace with permission. The official interface below shows the **Tunnel** connection selector. Suggested display name: **WinOwner MCP**. Description: **Authorized Windows workspace inspection and task monitoring.** Use the supported authentication mode for the server and review the requested access; retain the read-only setup.
+![Plugin: review authentication and the requested access](docs/assets/guide-03-en.svg)
 
-[![Official ChatGPT tunnel selector](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)
+Authentication settings must match the verified server configuration. Tunnel access does not establish owner identity.
 
-*Source: [OpenAI tunnel-client guide](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md). This screenshot shows OAuth; the interface and available authentication methods can vary. Authentication settings do not establish owner identity.*
+#### 4 · Plugin permissions (optional)
 
-[Official plugin setup reference](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+Review the available approval settings. `Allow all tools` reduces confirmation prompts, carries elevated risk and does not grant owner access. Prefer confirmation for sensitive actions. [Permission reference](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt).
 
-### 4 · Check that it works
-Local check passed ≠ tunnel ready ≠ ChatGPT connected. Confirm with a harmless read-only test. Do not enable access you do not need.
+### Verify the connection
+
+Local installation, tunnel readiness and a successful ChatGPT tool call are separate checks. Confirm using a harmless read-only request against an approved test workspace.
 
 ## Example prompts
 
@@ -105,26 +106,30 @@ Try read-only requests in an approved test workspace after connection:
 - "Summarize Git status for my approved project without changing anything."
 - "Show the status of my existing task."
 
-These are example requests, not screenshots or claims of live acceptance testing.
+![Illustrative read-only workspace response](docs/assets/demo-readonly-en.svg)
+
+*Example only: this is synthetic documentation, not a recording or a successful live acceptance test.*
 
 ## Capabilities & permissions
 
 The cloud catalog contains **14 baseline tools, up to 34 for eligible owner sessions**. Read-only by default; listing a tool does not authorize execution.
 
-| Area | Boundary |
-|---|---|
-| Files, workspaces, Git | Approved reads; separate write authorization |
-| Coding and tests | Separate execution authorization |
-| Tasks | Authorized monitoring and control |
-| Desktop and system | Sensitive access; separate identity and authorization |
+| Capability | Baseline catalog | Additional owner catalog | Access boundary |
+|---|---:|---:|---|
+| Workspace and Git inspection | 4 | 0 | Approved reads |
+| File and directory changes | 2 | 6 | Scoped writes; owner checks for additional tools |
+| Coding and tests | 2 | 0 | Separate execution authorization |
+| Task submission and monitoring | 6 | 0 | Submission does not authorize execution |
+| Task control | 0 | 4 | Verified owner authorization |
+| Desktop observation and interaction | 0 | 9 | Verified owner; interactive session and policy restrictions |
+| System execution | 0 | 1 | Separate authorization and Windows access boundaries |
+| **Total** | **14** | **20** | **34 catalog entries, not 34 pre-authorized actions** |
 
 [All 34 tool identifiers and permission model](docs/CAPABILITIES.md).
 
 ## Security and lifecycle
 
 The server defaults to read-only. A listed tool is not necessarily authorized to execute. Tunnel credentials are not proof of owner identity. Windows access controls still apply, and privileged execution is not an OS sandbox. See [Security](SECURITY.md) and the [permission model](docs/CAPABILITIES.md).
-
-For ChatGPT permission prompts, `Allow all tools` is **optional**, is not required to connect, and does **not** grant owner privileges; it carries elevated risk. Keep the initial read-only experience and review approvals for sensitive actions. [OpenAI permission reference](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt).
 
 ## Manage
 - `Disconnect-ChatGPT.cmd`: disconnect the verified local tunnel.
