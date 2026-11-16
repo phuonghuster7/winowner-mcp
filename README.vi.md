@@ -72,13 +72,13 @@ Chỉ sử dụng tổ chức và workspace được cấp phép. Các hình dư
 
 [Trang API keys](https://platform.openai.com/settings/organization/api-keys) · [Yêu cầu tunnel chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-![Runtime API key: chỉ cấp quyền cần thiết và giữ khóa riêng](docs/assets/guide-01-vi.svg)
+![Runtime API key: chỉ cấp quyền cần thiết và giữ khóa riêng](docs/assets/guide-01-vi.png)
 
 #### 2 · Tunnel riêng
 
 [Trang Tunnels](https://platform.openai.com/settings/organization/tunnels) · [Giao diện tham khảo chính thức](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md)
 
-![Tunnel riêng: sử dụng tổ chức và workspace được phép](docs/assets/guide-02-vi.svg)
+![Tunnel riêng: sử dụng tổ chức và workspace được phép](docs/assets/guide-02-vi.png)
 
 Tiện ích kết nối cục bộ là `Connect-ChatGPT.cmd`. Runtime API key xác thực tunnel client; Tunnel ID định danh đường kết nối. Không chia sẻ khóa trong chat hoặc ảnh chụp.
 
@@ -86,7 +86,7 @@ Tiện ích kết nối cục bộ là `Connect-ChatGPT.cmd`. Runtime API key x�
 
 [Trang plugin ChatGPT](https://chatgpt.com/plugins) · [Hướng dẫn kết nối chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-![Plugin: kiểm tra xác thực và phạm vi truy cập](docs/assets/guide-03-vi.svg)
+![Plugin: kiểm tra xác thực và phạm vi truy cập](docs/assets/guide-03-vi.png)
 
 Thiết lập Authentication phải phù hợp với cấu hình server đã xác minh. Giữ quyền chỉ đọc ban đầu; quyền sử dụng tunnel không xác minh danh tính owner.
 
@@ -112,7 +112,7 @@ Sau khi kết nối, thử với workspace kiểm thử đã được phép:
 - "Tóm tắt trạng thái Git dự án, không sửa bất kỳ tệp nào."
 - "Cho biết trạng thái tác vụ hiện có."
 
-![Minh họa phản hồi đọc workspace](docs/assets/demo-readonly-vi.svg)
+![Minh họa phản hồi đọc workspace](docs/assets/demo-readonly-vi.png)
 
 *Chỉ là ví dụ minh họa bằng dữ liệu giả, không phải video hay kết quả nghiệm thu trực tiếp.*
 
@@ -138,9 +138,10 @@ Danh mục cloud gồm **14 tool cơ bản, tối đa 34 tool khi đủ điều 
 Mặc định chỉ đọc; thấy tool không có nghĩa được phép thực thi. Khóa tunnel không xác minh danh tính owner. Quyền Windows vẫn được áp dụng; thực thi đặc quyền không phải sandbox hệ điều hành. Xem [bảo mật](SECURITY.md) và [mô hình quyền](docs/CAPABILITIES.md).
 
 ## Quản lý
+
 - `Disconnect-ChatGPT.cmd`: ngắt tunnel đã xác minh.
-- `Uninstall-WinOwner.cmd`: dừng và gỡ dịch vụ.
-- [Quản trị nâng cao](docs/ADVANCED_CHATGPT.vi.md): Show-OwnerKey và các tiện ích quản trị không thuộc luồng cài đặt ban đầu. Ghép nối owner và thu hồi quyền cần nghiệm thu riêng.
+- `Uninstall-WinOwner.cmd`: dừng và gỡ dịch vụ cùng tunnel đã xác minh.
+- [Quản trị nâng cao](docs/ADVANCED_CHATGPT.vi.md): Grant-OwnerAccess, Show-OwnerKey và các tiện ích quản trị không thuộc luồng cài đặt ban đầu. Ghép nối owner và thu hồi quyền cần nghiệm thu riêng.
 
 Chỉ khi cần xử lý lỗi, dùng `Check-WinOwner.cmd` trong `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`.
 

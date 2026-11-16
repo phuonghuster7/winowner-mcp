@@ -43,7 +43,9 @@ def test_documentation_assets_are_in_package_allowlist() -> None:
         for asset in assets:
             item = ROOT / asset
             assert item.is_file(), asset
-            assert item.suffix == ".svg", "Review binary screenshots separately before packaging"
+            assert item.suffix == ".png", "README images must use reviewed PNG exports"
+            assert item.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"), asset
+            assert item.with_suffix(".svg").is_file(), "Keep the editable diagram source"
             assert f'"{item.name}"' in builder, item.name
 
 

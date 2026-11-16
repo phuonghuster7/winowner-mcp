@@ -72,13 +72,13 @@ Use an approved organization and workspace. The diagrams below are illustrations
 
 [OpenAI API keys](https://platform.openai.com/settings/organization/api-keys) · [Official tunnel requirements](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-![Runtime API key: use only the necessary permissions and keep the key private](docs/assets/guide-01-en.svg)
+![Runtime API key: use only the necessary permissions and keep the key private](docs/assets/guide-01-en.png)
 
 #### 2 · Private tunnel
 
 [OpenAI Tunnels](https://platform.openai.com/settings/organization/tunnels) · [Official interface reference](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md)
 
-![Private tunnel: use an approved organization and workspace](docs/assets/guide-02-en.svg)
+![Private tunnel: use an approved organization and workspace](docs/assets/guide-02-en.png)
 
 The local connection utility is `Connect-ChatGPT.cmd`. The runtime key authenticates the tunnel client, while the Tunnel ID identifies the connection. Never share the key in chat or screenshots.
 
@@ -86,7 +86,7 @@ The local connection utility is `Connect-ChatGPT.cmd`. The runtime key authentic
 
 [ChatGPT plugins](https://chatgpt.com/plugins) · [Official connection guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-![Plugin: review authentication and the requested access](docs/assets/guide-03-en.svg)
+![Plugin: review authentication and the requested access](docs/assets/guide-03-en.png)
 
 Authentication settings must match the verified server configuration. Keep the initial access read-only; tunnel access does not establish owner identity.
 
@@ -112,7 +112,7 @@ Try read-only requests in an approved test workspace after connection:
 - "Summarize Git status for my approved project without changing anything."
 - "Show the status of my existing task."
 
-![Illustrative read-only workspace response](docs/assets/demo-readonly-en.svg)
+![Illustrative read-only workspace response](docs/assets/demo-readonly-en.png)
 
 *Example only: this is synthetic documentation, not a recording or a successful live acceptance test.*
 
@@ -138,6 +138,7 @@ The cloud catalog contains **14 baseline tools, up to 34 for eligible owner sess
 The server defaults to read-only. A listed tool is not necessarily authorized to execute. Tunnel credentials are not proof of owner identity. Windows access controls still apply, and privileged execution is not an OS sandbox. See [Security](SECURITY.md) and the [permission model](docs/CAPABILITIES.md).
 
 ## Manage
+
 - `Disconnect-ChatGPT.cmd`: disconnect the verified local tunnel.
 - `Uninstall-WinOwner.cmd`: stop/remove the verified service and tunnel.
 - [Advanced administration](docs/ADVANCED_CHATGPT.vi.md): Grant-OwnerAccess and other sensitive administrative facilities are not part of initial setup. Revocation and owner pairing need separate verification.

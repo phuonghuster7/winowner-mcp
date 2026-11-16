@@ -64,8 +64,8 @@ $moduleSpecs = @(
     @{ Dir = "config";        Exts = @(".json", ".yaml"); ExampleOnly = $true },
     @{ Dir = "scripts";       Exts = @(".ps1", ".py") },
     @{ Dir = "docs";          Exts = @(".md") },
-    # Repository-owned text diagrams only; binary screenshots require separate review.
-    @{ Dir = "docs\assets";   Exts = @(".svg"); ApprovedNames = @("guide-01-en.svg", "guide-02-en.svg", "guide-03-en.svg", "demo-readonly-en.svg", "guide-01-vi.svg", "guide-02-vi.svg", "guide-03-vi.svg", "demo-readonly-vi.svg") },
+    # Repository-owned SVG diagrams and reviewed PNG exports only; no arbitrary screenshots.
+    @{ Dir = "docs\assets";   Exts = @(".svg", ".png"); ApprovedNames = @("guide-01-en.svg", "guide-02-en.svg", "guide-03-en.svg", "demo-readonly-en.svg", "guide-01-vi.svg", "guide-02-vi.svg", "guide-03-vi.svg", "demo-readonly-vi.svg", "demo-readonly-en.png", "demo-readonly-vi.png", "guide-01-en.png", "guide-01-vi.png", "guide-02-en.png", "guide-02-vi.png", "guide-03-en.png", "guide-03-vi.png") },
     @{ Dir = "tests";         Exts = @(".py") }
 )
 
