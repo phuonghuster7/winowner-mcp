@@ -56,13 +56,13 @@ The local gateway is not intended to be exposed publicly. The tunnel requires ou
 ## Quick start
 
 ### 1 · Install
-Open Windows Command Prompt (CMD). For a published v1.2.0 release, the installation command is:
+Open Windows Command Prompt (CMD).
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
-The installer automatically checks local health and authentication. A successful installation does not require a second manual check.
+The installer automatically verifies local health and authentication.
 
-> Release availability: the v1.2.0 tag must be published before this command works. [Release downloads](https://github.com/phuonghuster7/winowner-mcp/releases).
+> The v1.2.0 release is not yet published. [Release downloads](https://github.com/phuonghuster7/winowner-mcp/releases).
 
 ### 2 · Prepare the private connection
 
@@ -74,17 +74,19 @@ For an authorized read-only setup, use the following official screens. Choose th
 
 *Source: [OpenAI tunnel-client guide](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md).*
 
-**B. Runtime API key** — [Open API keys](https://platform.openai.com/settings/organization/api-keys). Select **Create new secret key**; use a restricted key with the required tunnel permissions, not an admin key. See the [official permission requirements](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+**B. Runtime API key** — [Open API keys](https://platform.openai.com/settings/organization/api-keys). Select **Create new secret key**; use a restricted runtime key with the necessary permissions, not an admin key or an unrestricted key. OpenAI distinguishes Tunnels Read + Use (runtime/operator access) from Read + Manage (tunnel administration). See the [official permission requirements](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
 
 [![Official restricted API key dialog](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)
 
 *Source: [OpenAI Help Center](https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform). This example shows Restricted, not the tunnel-specific permission fields.*
 
+For documentation examples, use consistent resource labels such as `WinOwner MCP` for the tunnel and `WinOwner MCP Runtime` for the key. These names do not grant permissions.
+
 The local setup utility is `Connect-ChatGPT.cmd`. Keep the key private and do not include it in screenshots or chat.
 
 ### 3 · Add a private ChatGPT plugin
 
-Open [ChatGPT](https://chatgpt.com/#settings/Connectors) and locate **Plugins → Add custom MCP server** for an account/workspace with permission. The official interface below shows the **Tunnel** connection selector. Review its authentication requirements and requested access, and retain the read-only setup.
+Open [ChatGPT](https://chatgpt.com/#settings/Connectors) and locate **Plugins → Add custom MCP server** for an account/workspace with permission. The official interface below shows the **Tunnel** connection selector. Suggested display name: **WinOwner MCP**. Description: **Authorized Windows workspace inspection and task monitoring.** Use the supported authentication mode for the server and review the requested access; retain the read-only setup.
 
 [![Official ChatGPT tunnel selector](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)
 
