@@ -18,6 +18,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE_VERSION = "v1.2.0"
 
+# Ensure child Windows PowerShell 5.1 processes do not inherit PowerShell 7 PSModulePath from pwsh CI runners.
+os.environ.pop("PSModulePath", None)
+
 # SHA-256 of the eight PNG entries in the supplied WinOwner_8_images.zip.
 GUIDE_PNG_SHA256 = {
     "guide-01-en.png": "6f6e031b9953fd0784dbe346a717fc42759244c5626bf307885ab79f540fb3a4",

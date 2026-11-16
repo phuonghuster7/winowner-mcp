@@ -26,6 +26,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+if ($PSHOME -and ($env:PSModulePath -notlike "*$PSHOME\Modules*")) {
+    $env:PSModulePath = "$(Join-Path $PSHOME 'Modules');$env:PSModulePath"
+}
+
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 

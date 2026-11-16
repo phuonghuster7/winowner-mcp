@@ -92,8 +92,9 @@ jobs:
           python -m pytest -q tests/test_production_oauth_persistence_security.py
 
       - name: One-click regression, release version, documentation and ZIP integrity
-        shell: pwsh
+        shell: powershell
         run: |
+          Remove-Item Env:\PSModulePath -ErrorAction SilentlyContinue
           $report = Join-Path $env:RUNNER_TEMP 'oneclick-junit.xml'
           python -m pytest -q -ra --junitxml $report tests/test_oneclick_onboarding.py tests/test_s10_machine_independent_installer.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -106,8 +107,9 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-ReleasePackage.ps1 -DryRun
 
       - name: Real Windows CMD documented entrypoint (loopback dry-run, no install)
-        shell: pwsh
+        shell: powershell
         run: |
+          Remove-Item Env:\PSModulePath -ErrorAction SilentlyContinue
           python -m pytest -q tests/test_oneclick_onboarding.py::test_exact_irm_pipe_iex_entrypoint_without_install
 
       - name: Single-line bootstrap safety dry-run
