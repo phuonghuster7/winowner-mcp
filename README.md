@@ -2,7 +2,9 @@
 
 Connect your own Windows 10/11 computer to ChatGPT for approved, read-only tasks.
 
-[Tiếng Việt](README.vi.md) · [Technical documentation](docs/CONNECT_CHATGPT.md)
+**English** | [Tiếng Việt](README.vi.md)
+
+[Technical documentation](docs/CONNECT_CHATGPT.md)
 
 ```mermaid
 flowchart LR
@@ -10,11 +12,13 @@ flowchart LR
 ```
 
 ## 1 · Install
-Check [Releases](https://github.com/phuonghuster7/winowner-mcp/releases) first. The command below requires the v1.2.0 release tag; review the installer before running it in CMD.
+Open Windows Command Prompt (CMD). For a published v1.2.0 release, the installation command is:
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
-The install folder is `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`. Open it and run `Check-WinOwner.cmd`.
+The installer automatically checks local health and authentication. A successful installation does not require a second manual check.
+
+> Release availability: the v1.2.0 tag must be published before this command works. [Release downloads](https://github.com/phuonghuster7/winowner-mcp/releases).
 
 ## 2 · Private connection
 Use your authorized organization's [official Secure MCP Tunnel guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). The two values are a **Tunnel ID** and a **runtime API key**, not two API keys. The existing local setup utility is `Connect-ChatGPT.cmd`. Do not share keys.
@@ -42,6 +46,8 @@ The cloud catalog contains **14 baseline tools, up to 34 for eligible owner sess
 - `Disconnect-ChatGPT.cmd`: disconnect the verified local tunnel.
 - `Uninstall-WinOwner.cmd`: stop/remove the verified service and tunnel.
 - [Advanced administration](docs/ADVANCED_CHATGPT.vi.md): Grant-OwnerAccess and other sensitive administrative facilities are not part of initial setup. Revocation and owner pairing need separate verification.
+
+For troubleshooting only, use `Check-WinOwner.cmd` in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`.
 
 [Installation and repair](docs/INSTALLATION.md) · [Security](SECURITY.md) · [Quick guide](docs/START_HERE.vi.md)
 
