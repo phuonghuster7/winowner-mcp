@@ -2,9 +2,9 @@
 
 ## Beginner / one-click local setup (no Git required)
 
-Open CMD and paste the one-line installation command from [START_HERE](START_HERE.vi.md). Alternatively download and extract the ZIP, then double-click **Install-WinOwner.cmd**. The wrapper invokes the locally tested bootstrap with Windows PowerShell 5.1 and displays errors instead of silently exiting. Python 3.12 is installed through winget if available, otherwise install from python.org and rerun. The result is **LOCAL_INSTALL_PASS** with authenticated owner_full_control profile, not ChatGPT pairing.
+Use the version-specific installation instructions: [English](../README.md) | [Tiếng Việt](START_HERE.vi.md). Alternatively download and extract the ZIP, then double-click **Install-WinOwner.cmd**. The wrapper invokes the locally tested bootstrap with Windows PowerShell 5.1 and displays errors instead of silently exiting. Python 3.12 is installed through winget if available, otherwise install from python.org and rerun. The result is **LOCAL_INSTALL_PASS** with the authenticated local profile (read_only by default), not ChatGPT pairing. The one-line installer also runs local health/authentication checks automatically; a manual Check-WinOwner.cmd run is for troubleshooting or later rechecks.
 
-Follow the [short beginner guide](START_HERE.vi.md) for one-command local setup. For tunnel, Platform permissions and OAuth see the [advanced guide](ADVANCED_CHATGPT.vi.md). Prior RC3 release ZIPs do not contain the new launcher; use a newer source snapshot/release.
+Follow the [English quick start](../README.md) or [Vietnamese quick start](START_HERE.vi.md) for one-command local setup. For tunnel, Platform permissions and OAuth see the [advanced guide](ADVANCED_CHATGPT.vi.md). Prior RC3 release ZIPs do not contain the new launcher; use a newer source snapshot/release.
 
 ## Prerequisites
 
