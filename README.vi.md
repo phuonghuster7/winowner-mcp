@@ -55,7 +55,7 @@ Gateway cục bộ không được thiết kế để công khai ra Internet. Tu
 
 ## Cài đặt và kết nối
 
-### 1. Cài đặt
+### Cài đặt cục bộ
 Mở Command Prompt (CMD) trên Windows.
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
@@ -64,38 +64,39 @@ Bộ cài tự kiểm tra dịch vụ và xác thực trên máy.
 
 > Bản v1.2.0 chưa được phát hành. [Các bản phát hành](https://github.com/phuonghuster7/winowner-mcp/releases).
 
-### 2. Chuẩn bị kết nối riêng
+### Kết nối ChatGPT
 
-Dùng các trang chính thức sau cho kết nối chỉ đọc đã được cấp phép. Chọn đúng tổ chức và workspace mà bạn có quyền sử dụng.
+Chỉ sử dụng tổ chức và workspace được cấp phép. Các hình dưới đây là sơ đồ minh họa, không phải ảnh chụp giao diện OpenAI.
 
-**A. Tunnel ID** — [Mở trang Tunnels](https://platform.openai.com/settings/organization/tunnels). Chọn **Create tunnel**, chọn đúng tổ chức/workspace. Mã định danh xuất hiện trong danh sách tunnel.
+#### 1 · Runtime API key
 
-[![Giao diện tạo tunnel chính thức](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/tunnel-create-modal.png)](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/tunnel-create-modal.png)
+[Trang API keys](https://platform.openai.com/settings/organization/api-keys) · [Yêu cầu tunnel chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-*Nguồn: [Tài liệu OpenAI tunnel-client](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md).*
+![Runtime API key: chỉ cấp quyền cần thiết và giữ khóa riêng](docs/assets/guide-01-vi.svg)
 
-**B. Runtime API key** — [Mở trang API keys](https://platform.openai.com/settings/organization/api-keys). Chọn **Create new secret key**; sử dụng khóa runtime giới hạn quyền cần thiết, không dùng admin key hoặc khóa toàn quyền. OpenAI phân biệt Tunnels Read + Use (runtime/người vận hành) với Read + Manage (quản trị tunnel). Xem [điều kiện phân quyền chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
+#### 2 · Tunnel riêng
 
-[![Giao diện tạo API key giới hạn quyền](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)](https://images.ctfassets.net/j22is2dtoxu1/intercom-img-31e55bc83cf1bbb71a5c8c5e/03b55611063f104024f3d50a6a875625/Frame_13.png)
+[Trang Tunnels](https://platform.openai.com/settings/organization/tunnels) · [Giao diện tham khảo chính thức](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md)
 
-*Nguồn: [OpenAI Help Center](https://help.openai.com/en/articles/9186755-managing-projects-in-the-api-platform). Ảnh minh họa lựa chọn Restricted, chưa hiển thị riêng các trường quyền tunnel.*
+![Tunnel riêng: sử dụng tổ chức và workspace được phép](docs/assets/guide-02-vi.svg)
 
-Tên minh họa thống nhất: `WinOwner MCP` cho tunnel và `WinOwner MCP Runtime` cho khóa. Tên hiển thị không cấp thêm quyền.
+Tiện ích kết nối cục bộ là `Connect-ChatGPT.cmd`. Runtime API key và Tunnel ID có mục đích khác nhau. Không chia sẻ khóa trong chat hoặc ảnh chụp.
 
-Tiện ích cấu hình cục bộ: `Connect-ChatGPT.cmd`. Không đưa khóa riêng vào ảnh chụp hoặc chat.
+#### 3 · Plugin ChatGPT
 
-### 3. Tạo plugin riêng trong ChatGPT
+[Trang plugin ChatGPT](https://chatgpt.com/plugins) · [Hướng dẫn kết nối chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-Mở [ChatGPT](https://chatgpt.com/#settings/Connectors), tìm **Plugins → Add custom MCP server** trên tài khoản/workspace được phép. Ảnh chính thức bên dưới minh họa phần chọn kết nối **Tunnel**. Tên hiển thị đề xuất: **WinOwner MCP**. Mô tả: **Authorized Windows workspace inspection and task monitoring.** Chọn phương thức xác thực phù hợp với server, kiểm tra phạm vi quyền và giữ cấu hình chỉ đọc ban đầu.
+![Plugin: kiểm tra xác thực và phạm vi truy cập](docs/assets/guide-03-vi.svg)
 
-[![Giao diện chọn tunnel trong ChatGPT](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)](https://raw.githubusercontent.com/openai/tunnel-client/master/docs/images/chatgpt-connector-tunnel-select.png)
+Thiết lập Authentication phải phù hợp với cấu hình server đã xác minh. Quyền sử dụng tunnel không xác minh danh tính owner.
 
-*Nguồn: [Tài liệu OpenAI tunnel-client](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md). Ảnh đang hiển thị OAuth; giao diện và phương thức xác thực có thể khác nhau. Thiết lập Authentication không xác minh danh tính chủ máy.*
+#### 4 · Quyền plugin (tùy chọn)
 
-[Hướng dẫn plugin chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+Xem các lựa chọn phê duyệt. `Allow all tools` giảm yêu cầu xác nhận, tăng rủi ro và không cấp quyền owner. Nên giữ xác nhận riêng với thao tác nhạy cảm. [Tài liệu phân quyền](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt).
 
-### 4. Kiểm tra kết nối
-Máy hoạt động ≠ tunnel sẵn sàng ≠ ChatGPT kết nối thành công. Kiểm tra bằng một tác vụ đọc không nhạy cảm.
+### Kiểm tra kết nối
+
+Cài đặt cục bộ, tunnel sẵn sàng và ChatGPT gọi tool thành công là ba kiểm tra độc lập. Xác minh bằng tác vụ đọc không nhạy cảm trên workspace kiểm thử được cấp phép.
 
 ## Ví dụ sử dụng
 
@@ -105,26 +106,30 @@ Sau khi kết nối, thử với workspace kiểm thử đã được phép:
 - "Tóm tắt trạng thái Git dự án, không sửa bất kỳ tệp nào."
 - "Cho biết trạng thái tác vụ hiện có."
 
-Đây là ví dụ yêu cầu, không phải ảnh chụp hoặc kết quả nghiệm thu trực tiếp.
+![Minh họa phản hồi đọc workspace](docs/assets/demo-readonly-vi.svg)
+
+*Chỉ là ví dụ minh họa bằng dữ liệu giả, không phải video hay kết quả nghiệm thu trực tiếp.*
 
 ## Chức năng & quyền truy cập
 
 Danh mục cloud gồm **14 tool cơ bản, tối đa 34 tool khi đủ điều kiện owner**. Mặc định chỉ đọc; việc xuất hiện tool không đồng nghĩa được phép thực thi.
 
-| Nhóm | Phạm vi |
-|---|---|
-| Tệp, workspace, Git | Đọc dữ liệu được phép; ghi cần quyền riêng |
-| Lập trình và kiểm thử | Thực thi cần cấp quyền riêng |
-| Tác vụ | Theo dõi, điều phối theo quyền |
-| Desktop và hệ thống | Quyền nhạy cảm, cần xác thực và cấp phép |
+| Nhóm chức năng | Danh mục cơ bản | Bổ sung cho owner | Giới hạn quyền |
+|---|---:|---:|---|
+| Đọc workspace và Git | 4 | 0 | Đọc trong phạm vi cho phép |
+| Thay đổi tệp và thư mục | 2 | 6 | Quyền ghi có phạm vi; kiểm tra owner với tool bổ sung |
+| Lập trình và kiểm thử | 2 | 0 | Cần cấp quyền thực thi riêng |
+| Gửi và theo dõi tác vụ | 6 | 0 | Gửi tác vụ không đồng nghĩa được thực thi |
+| Điều phối tác vụ | 0 | 4 | Xác thực và cấp quyền owner |
+| Quan sát, tương tác Desktop | 0 | 9 | Xác thực owner, điều kiện phiên và chính sách |
+| Thực thi hệ thống | 0 | 1 | Cấp quyền riêng và giới hạn của Windows |
+| **Tổng** | **14** | **20** | **34 tool trong danh mục, không phải 34 quyền được cấp sẵn** |
 
 [Xem danh sách 34 tool và mô hình quyền](docs/CAPABILITIES.md).
 
 ## Bảo mật và phân quyền
 
 Mặc định chỉ đọc; thấy tool không có nghĩa được phép thực thi. Khóa tunnel không xác minh danh tính owner. Quyền Windows vẫn được áp dụng; thực thi đặc quyền không phải sandbox hệ điều hành. Xem [bảo mật](SECURITY.md) và [mô hình quyền](docs/CAPABILITIES.md).
-
-Thiết lập `Allow all tools` trong ChatGPT là **tùy chọn**, **không bắt buộc** để kết nối và **không cấp quyền owner**; tùy chọn này tăng rủi ro vì giảm yêu cầu xác nhận. Nên bắt đầu chỉ đọc, xác nhận riêng những thao tác nhạy cảm. [Tài liệu OpenAI](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt).
 
 ## Quản lý
 - `Disconnect-ChatGPT.cmd`: ngắt tunnel đã xác minh.
