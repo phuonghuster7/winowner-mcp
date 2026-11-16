@@ -56,7 +56,7 @@ Gateway cục bộ không được thiết kế để công khai ra Internet. Tu
 ## Cài đặt và kết nối
 
 ### Cài đặt cục bộ
-Mở Command Prompt (CMD) trên Windows.
+Mở Command Prompt (CMD) trên Windows khi bản phát hành tương ứng đã sẵn sàng.
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
@@ -80,7 +80,7 @@ Chỉ sử dụng tổ chức và workspace được cấp phép. Các hình dư
 
 ![Tunnel riêng: sử dụng tổ chức và workspace được phép](docs/assets/guide-02-vi.svg)
 
-Tiện ích kết nối cục bộ là `Connect-ChatGPT.cmd`. Runtime API key và Tunnel ID có mục đích khác nhau. Không chia sẻ khóa trong chat hoặc ảnh chụp.
+Tiện ích kết nối cục bộ là `Connect-ChatGPT.cmd`. Runtime API key xác thực tunnel client; Tunnel ID định danh đường kết nối. Không chia sẻ khóa trong chat hoặc ảnh chụp.
 
 #### 3 · Plugin ChatGPT
 
@@ -88,7 +88,7 @@ Tiện ích kết nối cục bộ là `Connect-ChatGPT.cmd`. Runtime API key v�
 
 ![Plugin: kiểm tra xác thực và phạm vi truy cập](docs/assets/guide-03-vi.svg)
 
-Thiết lập Authentication phải phù hợp với cấu hình server đã xác minh. Quyền sử dụng tunnel không xác minh danh tính owner.
+Thiết lập Authentication phải phù hợp với cấu hình server đã xác minh. Giữ quyền chỉ đọc ban đầu; quyền sử dụng tunnel không xác minh danh tính owner.
 
 #### 4 · Quyền plugin (tùy chọn)
 
@@ -96,7 +96,13 @@ Xem các lựa chọn phê duyệt. `Allow all tools` giảm yêu cầu xác nh�
 
 ### Kiểm tra kết nối
 
-Cài đặt cục bộ, tunnel sẵn sàng và ChatGPT gọi tool thành công là ba kiểm tra độc lập. Xác minh bằng tác vụ đọc không nhạy cảm trên workspace kiểm thử được cấp phép.
+| Kết quả | Phạm vi đã kiểm tra |
+|---|---|
+| `LOCAL_INSTALL_PASS` / `CHECK_PASS` | Dịch vụ và xác thực cục bộ |
+| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Tunnel sẵn sàng tại máy |
+| Tác vụ chỉ đọc thành công | Kết nối ChatGPT đối với tác vụ đó |
+
+Ba kiểm tra này độc lập. Xác minh bằng tác vụ đọc không nhạy cảm trên workspace kiểm thử được cấp phép.
 
 ## Ví dụ sử dụng
 
