@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 import subprocess
 import zipfile
@@ -12,6 +13,39 @@ from threading import Thread
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def _source_release_version() -> str:
+    script = (ROOT / "go.ps1").read_text(encoding="utf-8")
+    match = re.search(r"\[string\]\$Ref\s*=\s*'(?P<version>v\d+\.\d+\.\d+)'", script)
+    assert match, "go.ps1 must target an explicit version"
+    return match.group("version")
+
+
+def test_release_version_alignment() -> None:
+    version = _source_release_version()
+    script = (ROOT / "go.ps1").read_text(encoding="utf-8")
+    assert f"WinOwner MCP {version}" in script
+    assert f"WinOwnerMCP\\{version}" in script
+    for relative in ("README.md", "README.vi.md", "docs/START_HERE.vi.md"):
+        page = (ROOT / relative).read_text(encoding="utf-8")
+        refs = re.findall(r"github\.com/phuonghuster7/winowner-mcp/raw/([^/]+)/go\.ps1", page)
+        assert refs and set(refs) == {version}, (relative, refs)
+    assert f"targets **{version}**" in (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+
+
+def test_documentation_assets_are_in_package_allowlist() -> None:
+    builder = (ROOT / "scripts" / "Build-ReleasePackage.ps1").read_text(encoding="utf-8")
+    assert 'Dir = "docs\\assets"' in builder
+    for relative in ("README.md", "README.vi.md"):
+        page = (ROOT / relative).read_text(encoding="utf-8")
+        assets = re.findall(r"!?\[[^\]]*\]\((docs/assets/[^)]+)\)", page)
+        assert assets, relative
+        for asset in assets:
+            item = ROOT / asset
+            assert item.is_file(), asset
+            assert item.suffix == ".svg", "Review binary screenshots separately before packaging"
+            assert f'"{item.name}"' in builder, item.name
+
 
 
 def test_beginner_entrypoint_and_release_inventory() -> None:
@@ -39,7 +73,7 @@ def test_beginner_entrypoint_and_release_inventory() -> None:
     assert "Get-Credential" not in ps
     for name in ("README.md", "README.vi.md"):
         introduction = (ROOT / name).read_text(encoding="utf-8")
-        assert "v1.2.0" in introduction
+        assert _source_release_version() in introduction
         assert "ChatGPT" in introduction
         assert not any(name in introduction for name in ("Claude", "Cursor", "Gemini"))
     assert "LOCAL_INSTALL_PASS" in ps
@@ -54,7 +88,7 @@ def test_beginner_entrypoint_and_release_inventory() -> None:
     assert "OAuth" in docs
     assert "Check-WinOwner.cmd" in docs
     assert len(docs.encode("utf-8")) < 6000
-    assert "https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1" in docs
+    assert f"https://github.com/phuonghuster7/winowner-mcp/raw/{_source_release_version()}/go.ps1" in docs
     assert "go.ps1" in (ROOT / "README.md").read_text(encoding="utf-8")
     assert "*.cmd -text" in (ROOT / ".gitattributes").read_text(encoding="utf-8")
     assert (ROOT / "scripts" / "Test-WinOwnerOnline.ps1").is_file()
@@ -66,7 +100,7 @@ def test_nontech_chatgpt_journey_is_honest_and_actionable() -> None:
     vi = (ROOT / "README.vi.md").read_text(encoding="utf-8")
     en = (ROOT / "README.md").read_text(encoding="utf-8")
     quick = (ROOT / "docs" / "START_HERE.vi.md").read_text(encoding="utf-8")
-    expected = 'powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"'
+    expected = f'powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/{_source_release_version()}/go.ps1|iex"'
     for page in (vi, en, quick):
         assert expected in page
         assert "Authentication" in page or "Full Control" in page
