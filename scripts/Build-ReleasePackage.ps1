@@ -9,7 +9,7 @@
        patterns (`sk-`, `PRIVATE KEY`, unredacted `Bearer` tokens, raw `dpapi_blob`).
     3. Stages the clean release tree with `.gitkeep` placeholders for runtime directories.
     4. Builds:
-         - `D:\ExampleProjects\Windows-MCP-Agent\dist\winowner-mcp-v1.0.0-rc1.zip`
+         - `D:\ExampleProjects\Windows-MCP-Agent\dist\winowner-mcp-v1.2.0.zip`
          - `D:\ExampleProjects\Windows-MCP-Agent\dist\release-manifest.json`
          - `D:\ExampleProjects\Windows-MCP-Agent\dist\SHA256SUMS.txt`
 #>
@@ -64,8 +64,8 @@ $moduleSpecs = @(
     @{ Dir = "config";        Exts = @(".json", ".yaml"); ExampleOnly = $true },
     @{ Dir = "scripts";       Exts = @(".ps1", ".py") },
     @{ Dir = "docs";          Exts = @(".md") },
-    # Repository-owned SVG diagrams and reviewed PNG exports only; no arbitrary screenshots.
-    @{ Dir = "docs\assets";   Exts = @(".svg", ".png"); ApprovedNames = @("guide-01-en.svg", "guide-02-en.svg", "guide-03-en.svg", "demo-readonly-en.svg", "guide-01-vi.svg", "guide-02-vi.svg", "guide-03-vi.svg", "demo-readonly-vi.svg", "demo-readonly-en.png", "demo-readonly-vi.png", "guide-01-en.png", "guide-01-vi.png", "guide-02-en.png", "guide-02-vi.png", "guide-03-en.png", "guide-03-vi.png") },
+    # Reviewed PNG exports only; no arbitrary screenshots or legacy SVGs.
+    @{ Dir = "docs\assets";   Exts = @(".png"); ApprovedNames = @("guide-01-en.png", "guide-01-vi.png", "guide-02-en.png", "guide-02-vi.png", "guide-03-en.png", "guide-03-vi.png", "guide-04-en.png", "guide-04-vi.png") },
     @{ Dir = "tests";         Exts = @(".py") }
 )
 

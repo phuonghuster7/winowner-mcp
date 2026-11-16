@@ -4,166 +4,210 @@
 
 **Your Windows workspace, available in ChatGPT.**
 
-An open-source Windows MCP gateway for authorized workspace inspection, development workflows, and task management.
+An open-source Windows MCP gateway for authorized workspace inspection, scoped development workflows, and task management.
 
 Windows 10/11 · Model Context Protocol · MIT
 
 **English** | [Tiếng Việt](README.vi.md)
 
-[Get started](#quick-start) · [Features](#features) · [Architecture](#architecture) · [Tool catalog](docs/CAPABILITIES.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
+[Overview](#overview) · [Features](#key-features) · [Architecture](#architecture) · [Quick Start](#quick-start) · [34 Tools](docs/CAPABILITIES.md) · [Security & Permissions](#security--permissions) · [Troubleshooting](#troubleshooting)
 
 </div>
 
-## Why WinOwner?
+## Overview
 
-WinOwner runs on your own Windows computer rather than replacing your workspace with a cloud VM. The connection is private; the server applies its own authentication and permission policy. Access is read-only by default, with separate authorization for sensitive operations.
+WinOwner MCP connects your own Windows workstation to ChatGPT over an authenticated private tunnel, rather than moving your files to a cloud VM. The local MCP gateway stays bound to loopback (`127.0.0.1:8768`), checks authentication and policy on every call, defaults to `read_only`, and keeps Windows NTFS ACLs and user-session boundaries intact.
 
-## Features
+## Key features
 
-| Feature | What it means |
+| Feature | What it delivers |
 |---|---|
-| Windows-first setup | One-command local installation with automatic health and authentication checks |
-| Workspace awareness | Inspect approved directories, text files and Git status or diffs |
-| Coding workflow | Scoped editing and test capabilities where explicitly authorized |
-| Task lifecycle | Task status, logs, diffs and artifacts; separate authorization for task control |
-| Desktop integration | Desktop capabilities in the owner catalog, subject to identity, policy and session restrictions |
-| Connection lifecycle | Local checks, tunnel disconnection and uninstall utilities |
+| Windows-first onboarding | Single-command install (`go.ps1`) or extracted ZIP launcher (`Install-WinOwner.cmd`) with automated local health and auth verification |
+| Workspace & Git inspection | Inspect approved directories, read text files, and review `git status` or `git diff` |
+| Scoped coding workflow | File modifications, test runs, and command execution only within explicitly authorized scopes |
+| Task lifecycle management | Background task status, logs, diffs, and artifacts; owner-verified pause, resume, cancel, and emergency stop |
+| Desktop capability boundary | Window observation, screenshots, and UI input strictly gated by owner identity, policy, and interactive session rules |
+| Connection lifecycle tools | Local diagnostics (`Check-WinOwner.cmd`), tunnel management (`Connect-ChatGPT.cmd`, `Disconnect-ChatGPT.cmd`), and clean uninstall |
 
 ## Architecture
 
 ```mermaid
 flowchart TD
   C["ChatGPT"] <--> T["OpenAI Secure MCP Tunnel"]
-  subgraph W["Your Windows computer"]
-    A["Tunnel client"] <--> G["Local MCP gateway"]
-    G --> P["Authentication and policy"]
-    P --> F["Approved workspace"]
-    P --> J["Task and coding services"]
+  subgraph W["Your Windows workstation"]
+    A["tunnel-client (outbound HTTPS)"] <--> G["Local MCP gateway (127.0.0.1:8768)"]
+    G --> P["Authentication, OAuth & policy"]
+    P --> F["Approved workspaces"]
+    P --> J["Task & coding services"]
     P --> D["Desktop capability boundary"]
   end
   T <--> A
 ```
 
-The local gateway is not intended to be exposed publicly. The tunnel requires outbound HTTPS; Windows must be running and the relevant services available. The gateway does not elevate Windows privileges.
+- The local gateway binds to `127.0.0.1` only and is never intended to be exposed directly on public interfaces.
+- Connectivity uses an outbound HTTPS tunnel via the official OpenAI `tunnel-client` (downloaded and SHA-256 verified during `Connect-ChatGPT.cmd`).
+- WinOwner runs under your standard Windows user session and never elevates Windows privileges or bypasses NTFS/UAC.
 
-## Requirements
+## System requirements
 
-- Windows 10/11 x64 and Windows PowerShell 5.1.
-- Python 3.12; the setup can install it with winget where available.
-- Internet access and an eligible ChatGPT account/workspace permitted to add custom MCP servers; separate Platform tunnel permissions apply.
-- A Windows user session for local services; interactive desktop features have additional session requirements.
+- Windows 10 or Windows 11 (x64) with Windows PowerShell 5.1.
+- Python 3.12 (the installer can install it via `winget` where available, or you can install from python.org).
+- Outbound Internet access plus an eligible ChatGPT account/workspace allowed to add custom MCP servers and OpenAI Platform permissions to create a Runtime API key and Tunnel.
+- An active Windows user session for local services; interactive desktop tools require an unlocked interactive desktop session.
 
-## Quick start
+## Quick Start
 
 ### Install locally
-Open Windows Command Prompt (CMD) when the matching release is available.
+
+> The `v1.2.0` tag and archive are not yet published. Only run the one-line installer after verifying `v1.2.0` is available under [GitHub Releases](https://github.com/phuonghuster7/winowner-mcp/releases).
+
+Open Windows Command Prompt (**CMD**) when `v1.2.0` is published (or extract the verified release ZIP and double-click `Install-WinOwner.cmd`):
+
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
-The installer automatically verifies local health and authentication.
 
-> The v1.2.0 release is not yet published. [Release downloads](https://github.com/phuonghuster7/winowner-mcp/releases).
+By default, WinOwner installs into `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` in `read_only` mode, creates dependencies in an isolated `.venv`, registers a per-user Task Scheduler startup task, and verifies local `/health` and anonymous HTTP `401` enforcement (`LOCAL_INSTALL_PASS`).
 
 ### Connect to ChatGPT
 
-Use an approved organization and workspace. The diagrams below are illustrations, not screenshots of the OpenAI interface.
+Use an approved OpenAI organization and ChatGPT workspace. The four diagrams below are redacted illustrations (`Private identifiers redacted`), not live OpenAI UI screenshots.
 
-#### 1 · Runtime API key
+#### Step 1 · Create a Runtime API key
 
-[OpenAI API keys](https://platform.openai.com/settings/organization/api-keys) · [Official tunnel requirements](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+[OpenAI API keys](https://platform.openai.com/settings/organization/api-keys) · [Official Secure MCP Tunnels guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-![Runtime API key: use only the necessary permissions and keep the key private](docs/assets/guide-01-en.png)
+![Step 1 — Create Runtime API key: name it and grant only required tunnel permissions](docs/assets/guide-01-en.png)
 
-#### 2 · Private tunnel
+1. **Name the API key:** enter a recognizable name such as `WinOwner MCP Runtime`.
+2. **Review permissions:** select **Restricted** and grant only the permissions required for the tunnel—never grant unnecessary organization admin rights.
+3. **Create the key:** click **Create secret key** and store it safely. Never paste the key in chat messages, Git commits, or screenshots.
 
-[OpenAI Tunnels](https://platform.openai.com/settings/organization/tunnels) · [Official interface reference](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md)
+#### Step 2 · Create a Private Tunnel
 
-![Private tunnel: use an approved organization and workspace](docs/assets/guide-02-en.png)
+[OpenAI Tunnels](https://platform.openai.com/settings/organization/tunnels) · [Official tunnel-client end-user guide](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md)
 
-The local connection utility is `Connect-ChatGPT.cmd`. The runtime key authenticates the tunnel client, while the Tunnel ID identifies the connection. Never share the key in chat or screenshots.
+![Step 2 — Create Private Tunnel: select your organization and workspace](docs/assets/guide-02-en.png)
 
-#### 3 · ChatGPT plugin
+1. **Tunnel name:** enter `Winowner-mcp` (or another clear identifier).
+2. **Description:** add a short description such as `winowner mcp`.
+3. **Organization:** select the existing OpenAI organization you are authorized to use.
+4. **Workspace:** select the matching ChatGPT workspace if listed.
+5. **Create tunnel:** click **Create** and note the generated `Tunnel ID` (`tunnel_...`).
 
-[ChatGPT plugins](https://chatgpt.com/plugins) · [Official connection guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+Next, run `Connect-ChatGPT.cmd` in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` and enter your Runtime API key (hidden prompt) and `Tunnel ID`. The runtime key authenticates `tunnel-client`; the `Tunnel ID` identifies the tunnel endpoint.
 
-![Plugin: review authentication and the requested access](docs/assets/guide-03-en.png)
+#### Step 3 · Create the ChatGPT Plugin
 
-Authentication settings must match the verified server configuration. Keep the initial access read-only; tunnel access does not establish owner identity.
+[ChatGPT plugins](https://chatgpt.com/plugins) · [Official Secure MCP Tunnels guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) · [About Authentication None (Vietnamese)](docs/AUTH_NONE.vi.md)
 
-#### 4 · Plugin permissions (optional)
+![Step 3 — Create Plugin: choose Tunnel, match verified auth settings, and review warnings](docs/assets/guide-03-en.png)
 
-Review the available approval settings. `Allow all tools` reduces confirmation prompts, carries elevated risk and does not grant owner access. Prefer confirmation for sensitive actions. [Permission reference](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt).
+1. **Plugin name:** enter `Winowner-mcp`.
+2. **Connection:** switch **Connection** to **Tunnel**.
+3. **Tunnel ID:** enter the `Tunnel ID` from Step 2.
+4. **Authentication:** match your verified server configuration (`No authentication` applies when WinOwner enforces authentication/policy at the private tunnel and backend; it never bypasses backend HTTP `401` checks or grants owner access).
+5. **Finish:** read the trust warning, check **I understand and want to continue**, and click **Create as a plugin**. Keep initial access `read_only`.
 
-ChatGPT approval settings control when ChatGPT asks permission to call a tool. Backend authorization independently checks identity, scope and policy for each request. Selecting `Allow all tools` does not bypass backend checks or enable owner privileges.
+#### Step 4 · Plugin Permissions (optional)
+
+[Managing app permissions in ChatGPT](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt)
+
+![Step 4 — Plugin permissions (optional): recommended read-only mode vs elevated risk](docs/assets/guide-04-en.png)
+
+This step is **optional and not required to connect**.
+
+1. **Approval settings:** controls when ChatGPT asks for confirmation in the chat UI before calling a tool.
+2. **Recommended — read-only (`Allow read-only tools`):** allows reads while asking before making changes.
+3. **`Allow all tools`:** suppresses ChatGPT UI prompts, carries elevated risk, and **does not grant owner access**. Keep confirmation enabled for sensitive actions.
+
+**ChatGPT approval vs. backend permissions:** ChatGPT approval settings only control UI confirmation prompts. The WinOwner backend and Windows OS independently check identity, OAuth owner delegation, capability grants, and workspace policy on every request. Selecting `Allow all tools` never bypasses backend checks.
 
 ### Verify the connection
 
-| Result | What is verified |
+| Check | Scope verified |
 |---|---|
-| `LOCAL_INSTALL_PASS` / `CHECK_PASS` | Local service and authentication checks |
-| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Local tunnel readiness |
-| Successful read-only request | Actual ChatGPT connection for that request |
+| `LOCAL_INSTALL_PASS` / `CHECK_PASS` | Local MCP service health and anonymous HTTP `401` blocking |
+| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Local `tunnel-client` task running and `/readyz` responding |
+| Successful read-only request in ChatGPT | End-to-end tool execution for that ChatGPT workspace and request |
 
-These checks are distinct. Confirm using a harmless read-only request against an approved test workspace.
+These three checks are independent. Confirm end-to-end connectivity with a harmless read-only request against an approved test workspace before enabling any write or owner capability.
 
-## Example prompts
+## Usage examples
 
-Try read-only requests in an approved test workspace after connection:
+Try non-destructive read-only prompts in an approved test workspace first:
 
-- "List my approved workspaces."
-- "Summarize Git status for my approved project without changing anything."
-- "Show the status of my existing task."
+- `"List my approved workspaces."`
+- `"Summarize Git status for my approved project without modifying any files."`
+- `"Show the status of my existing task."`
 
-![Illustrative read-only workspace response](docs/assets/demo-readonly-en.png)
+Illustrative read-only response structure:
 
-*Example only: this is synthetic documentation, not a recording or a successful live acceptance test.*
+```text
+Approved workspaces:
+- D:\SampleWorkspace (read_only)
 
-## Capabilities & permissions
+Git status summary:
+- branch: feat/example
+- modified files: 0
+- untracked files: 0
 
-The cloud catalog contains **14 baseline tools, up to 34 for eligible owner sessions**. Read-only by default; listing a tool does not authorize execution.
+Task status:
+- no active mutating tasks
+```
 
-| Capability | Baseline catalog | Additional owner catalog | Access boundary |
+*Illustrative example only: synthetic output for documentation clarity, not a live acceptance recording.*
+
+## Capabilities — 34 tools
+
+The cloud catalog defines **14 baseline tools** and **20 additional owner-catalog tools** (**34 catalog entries total**). WinOwner defaults to `read_only`; a tool appearing in the catalog does not authorize execution.
+
+| Capability group | Baseline | Owner catalog | Access & safety boundary |
 |---|---:|---:|---|
-| Workspace and Git inspection | 4 | 0 | Approved reads |
-| File and directory changes | 2 | 6 | Scoped writes; owner checks for additional tools |
-| Coding and tests | 2 | 0 | Separate execution authorization |
-| Task submission and monitoring | 6 | 0 | Submission does not authorize execution |
-| Task control | 0 | 4 | Verified owner authorization |
-| Desktop observation and interaction | 0 | 9 | Verified owner; interactive session and policy restrictions |
-| System execution | 0 | 1 | Separate authorization and Windows access boundaries |
-| **Total** | **14** | **20** | **34 catalog entries, not 34 pre-authorized actions** |
+| Workspace & Git inspection | 4 | 0 | Read approved workspace paths and Git metadata |
+| File & directory changes | 2 | 6 | Scoped edits (`read_only` blocked unless write/owner grants apply) |
+| Coding & test execution | 2 | 0 | Explicit execution authorization; not an OS sandbox |
+| Task submission & monitoring | 6 | 0 | Task submission does not authorize unattended execution |
+| Task lifecycle control | 0 | 4 | Pause, resume, cancel, and emergency stop require owner auth |
+| Desktop observation & interaction | 0 | 9 | Owner-verified; interactive session and policy restrictions apply |
+| System execution | 0 | 1 | `agent_powershell_execute`; strict owner authorization & Windows ACLs |
+| **Total** | **14** | **20** | **34 catalog entries — not 34 pre-authorized actions** |
 
-[All 34 tool identifiers and permission model](docs/CAPABILITIES.md).
+See the complete identifier list and permission tiers in [docs/CAPABILITIES.md](docs/CAPABILITIES.md).
 
-## Security and lifecycle
+## Security & Permissions
 
-The server defaults to read-only. A listed tool is not necessarily authorized to execute. Tunnel credentials are not proof of owner identity. Windows access controls still apply, and privileged execution is not an OS sandbox. See [Security](SECURITY.md) and the [permission model](docs/CAPABILITIES.md).
+WinOwner separates controls into three independent layers:
 
-## Manage
+1. **ChatGPT plugin approvals (UI layer):** configures when ChatGPT asks for user confirmation (`Always ask`, `Allow read-only tools`, or `Allow all tools`). Optional, and never authoritative on the host.
+2. **WinOwner backend authorization (gateway layer):** requires authenticated caller/tunnel credentials, enforces `read_only` by default, isolates OAuth owner pairing (`Grant-OwnerAccess.cmd`) from shared tunnel credentials, and validates path/workspace scopes and capability grants on every tool call.
+3. **Windows host controls (OS layer):** runs under your unprivileged Windows user account; standard Windows NTFS permissions and UAC continue to apply.
 
-- `Disconnect-ChatGPT.cmd`: disconnect the verified local tunnel.
-- `Uninstall-WinOwner.cmd`: stop/remove the verified service and tunnel.
-- [Advanced administration](docs/ADVANCED_CHATGPT.vi.md): Grant-OwnerAccess and other sensitive administrative facilities are not part of initial setup. Revocation and owner pairing need separate verification.
+Local management utilities in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`:
 
-For troubleshooting only, use `Check-WinOwner.cmd` in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`.
+- `Check-WinOwner.cmd`: verify local service health, anonymous `401` enforcement, and local tunnel readiness.
+- `Disconnect-ChatGPT.cmd`: stop and unregister only the verified local tunnel task while leaving local install/auth intact.
+- `Uninstall-WinOwner.cmd`: stop and remove verified local service and tunnel tasks cleanly.
+- [Advanced owner administration (Vietnamese)](docs/ADVANCED_CHATGPT.vi.md): `Grant-OwnerAccess.cmd`, `Show-OwnerKey.cmd`, and `Revoke-OwnerAccess.cmd` are explicit administrative tools kept separate from initial setup.
 
-[Installation and repair](docs/INSTALLATION.md) · [Security](SECURITY.md) · [Vietnamese quick guide](docs/START_HERE.vi.md)
+See [SECURITY.md](SECURITY.md), [docs/INSTALLATION.md](docs/INSTALLATION.md), and [docs/START_HERE.vi.md](docs/START_HERE.vi.md).
 
 ## Troubleshooting
 
-| Symptom | Check |
+| Symptom | Recommended check |
 |---|---|
-| Local install fails | Review the installer result and local diagnostic output |
-| Tunnel unavailable | Check connection status and account/workspace eligibility |
-| Tool call denied | Check the authorized scope; do not weaken authentication |
-| Need to disconnect | Use the local disconnect utility and review remote access separately |
+| Local install fails | Review `WinOwner-SETUP-RESULT.txt` and rerun `Check-WinOwner.cmd`; verify Python 3.12 and port `8768` availability |
+| HTTP `401` / unauthorized | Ensure you ran `Connect-ChatGPT.cmd` with a valid Runtime API key and Tunnel ID; do not disable backend auth |
+| Tunnel not ready or `429` | Inspect `tunnel-client` status and network/rate-limit state via `Check-WinOwner.cmd` |
+| Tool call denied | Confirm workspace scope, `read_only` vs. owner grant state; do not weaken authentication |
+| Need to stop immediately | Disconnect with `Disconnect-ChatGPT.cmd` or trigger the emergency stop and revoke grants separately |
 
-See [Troubleshooting](docs/TROUBLESHOOTING.md) for details.
+Detailed recovery steps are documented in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-## Project links
+## License
 
-[Releases](https://github.com/phuonghuster7/winowner-mcp/releases) · [CI history](https://github.com/phuonghuster7/winowner-mcp/actions) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)
+Released under the [MIT License](LICENSE).
 
-CI does not establish live ChatGPT pairing, compatibility on every machine or a security certification.
-
-MIT licensed; independent of OpenAI and Microsoft.
+- [GitHub Releases](https://github.com/phuonghuster7/winowner-mcp/releases) · [CI Runs](https://github.com/phuonghuster7/winowner-mcp/actions) · [Contributing](CONTRIBUTING.md)
+- Automated CI validates source hygiene, static security checks, packaging, and local dry-runs; it does not establish live ChatGPT pairing, compatibility on every machine, or a security certification.
+- Independent open-source project; not affiliated with OpenAI or Microsoft.

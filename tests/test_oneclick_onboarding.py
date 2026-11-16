@@ -1,6 +1,8 @@
 """Local one-click release and safety dry-run checks (no cloud credentials)."""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import socket
@@ -9,15 +11,31 @@ import zipfile
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
+from urllib.parse import unquote, urlsplit
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE_VERSION = "v1.2.0"
+
+# SHA-256 of the eight PNG entries in the supplied WinOwner_8_images.zip.
+GUIDE_PNG_SHA256 = {
+    "guide-01-en.png": "6f6e031b9953fd0784dbe346a717fc42759244c5626bf307885ab79f540fb3a4",
+    "guide-01-vi.png": "3f2216a1f944a32523a370c034b55cc4996d9ac45a1d6f171a14a4adc067e8d3",
+    "guide-02-en.png": "31b6b7b5f3fc326fa7e1fbcdd0566c64d946250c4d5a72ac4dbcfb555516f098",
+    "guide-02-vi.png": "c694cce04353ed24849e8b4ae01918278b17d97ba69972ba293b0cc48de24fbb",
+    "guide-03-en.png": "388374984ab5c4ac1020504138a80f978f3b0ed67ba3e643a8dfae7a02c988e7",
+    "guide-03-vi.png": "7b31f74284260481ad6edd894f1b89c471558c1cc69c1fa35d342cbd1b0d6b19",
+    "guide-04-en.png": "a834090286e6fd0dbf49f8bdc1231ac4b4d30d7052bc14c25f28fc08b80d3076",
+    "guide-04-vi.png": "fb3b039eb3de6b78363e99d95f45b701ed868ca347fca9874152121f1fff385e",
+}
+
 
 def _source_release_version() -> str:
     script = (ROOT / "go.ps1").read_text(encoding="utf-8")
     match = re.search(r"\[string\]\$Ref\s*=\s*'(?P<version>v\d+\.\d+\.\d+)'", script)
     assert match, "go.ps1 must target an explicit version"
+    assert match.group("version") == RELEASE_VERSION
     return match.group("version")
 
 
@@ -30,7 +48,20 @@ def test_release_version_alignment() -> None:
         page = (ROOT / relative).read_text(encoding="utf-8")
         refs = re.findall(r"github\.com/phuonghuster7/winowner-mcp/raw/([^/]+)/go\.ps1", page)
         assert refs and set(refs) == {version}, (relative, refs)
+        install_paths = re.findall(r"WinOwnerMCP\\(v\d+\.\d+\.\d+(?:-rc\d+)?)", page)
+        assert install_paths and set(install_paths) == {version}, (relative, install_paths)
+        if relative.startswith("README"):
+            assert re.search(rf"^# WinOwner MCP {re.escape(version)}$", page, re.M), relative
     assert f"targets **{version}**" in (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    assert version in (ROOT / "docs" / "AUTH_NONE.vi.md").read_text(encoding="utf-8")
+    assert version[1:] in (ROOT / "docs" / "ADVANCED_CHATGPT.vi.md").read_text(encoding="utf-8")
+    policy_example = json.loads((ROOT / "config" / "policy.example.json").read_text(encoding="utf-8"))
+    assert policy_example.get("version") == version[1:]
+    bug_template = (ROOT / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml").read_text(encoding="utf-8")
+    assert f"placeholder: {version}" in bug_template
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    first_release_heading = re.search(r"^## .*?\b(v\d+\.\d+\.\d+(?:-rc\d+)?)\b", changelog, re.M)
+    assert first_release_heading and first_release_heading.group(1) == version
 
 
 def test_release_version_alignment_runtime_and_installers() -> None:
@@ -40,6 +71,15 @@ def test_release_version_alignment_runtime_and_installers() -> None:
         assert f"WinOwner MCP {version}" in text, relative
     builder = (ROOT / "scripts/Build-ReleasePackage.ps1").read_text(encoding="utf-8")
     assert f'[string]$Version = "{version}"' in builder
+    runtime_version = (ROOT / "runtime/__init__.py").read_text(encoding="utf-8")
+    assert re.search(rf'^__version__\s*=\s*[\'\"]{re.escape(version[1:])}[\'\"]\s*$', runtime_version, re.M)
+    for relative in ("scripts/Test-WinOwnerOneClick.ps1", "scripts/Test-WinOwnerOnline.ps1",
+                     "scripts/Test-WinOwnerUpgrade.ps1"):
+        script = (ROOT / relative).read_text(encoding="utf-8")
+        zip_versions = re.findall(r"winowner-mcp-(v\d+\.\d+\.\d+(?:-rc\d+)?)\.zip", script)
+        assert zip_versions and set(zip_versions) == {version}, (relative, zip_versions)
+        build_versions = re.findall(r"Build-ReleasePackage\.ps1[^\n]*-Version\s+(v\d+\.\d+\.\d+(?:-rc\d+)?)", script)
+        assert build_versions and set(build_versions) == {version}, (relative, build_versions)
     # Exercise the manifest-free fallback independently of local release evidence.
     import runpy
     from tempfile import TemporaryDirectory
@@ -50,20 +90,133 @@ def test_release_version_alignment_runtime_and_installers() -> None:
         assert get_identity()["release_version"] == version
 
 
-def test_documentation_assets_are_in_package_allowlist() -> None:
+@pytest.mark.parametrize("name, expected", GUIDE_PNG_SHA256.items())
+def test_supplied_guide_png_hash(name: str, expected: str) -> None:
+    path = ROOT / "docs/assets" / name
+    assert path.is_file(), f"Missing supplied PNG: {name}"
+    data = path.read_bytes()
+    assert data.startswith(b"\x89PNG\r\n\x1a\n"), name
+    assert hashlib.sha256(data).hexdigest() == expected, name
+
+
+@pytest.mark.parametrize("relative, language", [("README.md", "en"), ("README.vi.md", "vi")])
+def test_documentation_assets_are_in_package_allowlist(relative: str, language: str) -> None:
     builder = (ROOT / "scripts" / "Build-ReleasePackage.ps1").read_text(encoding="utf-8")
     assert 'Dir = "docs\\assets"' in builder
-    for relative in ("README.md", "README.vi.md"):
-        page = (ROOT / relative).read_text(encoding="utf-8")
-        assets = re.findall(r"!?\[[^\]]*\]\((docs/assets/[^)]+)\)", page)
-        assert assets, relative
-        for asset in assets:
-            item = ROOT / asset
-            assert item.is_file(), asset
-            assert item.suffix == ".png", "README images must use reviewed PNG exports"
-            assert item.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"), asset
-            assert item.with_suffix(".svg").is_file(), "Keep the editable diagram source"
-            assert f'"{item.name}"' in builder, item.name
+    assert ".svg" not in builder and "demo-readonly" not in builder
+    assets_dir = ROOT / "docs" / "assets"
+    actual_files = {item.name for item in assets_dir.iterdir() if item.is_file()}
+    assert actual_files == set(GUIDE_PNG_SHA256.keys()), actual_files
+    page = (ROOT / relative).read_text(encoding="utf-8")
+    assets = re.findall(r"!\[[^\]]*\]\((docs/assets/[^)]+)\)", page)
+    expected_sequence = [f"docs/assets/guide-0{i}-{language}.png" for i in range(1, 5)]
+    assert assets == expected_sequence, (relative, assets, expected_sequence)
+    for asset in assets:
+        item = ROOT / asset
+        assert item.is_file(), asset
+        assert item.suffix == ".png", "README images must use reviewed PNG exports"
+        assert item.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"), asset
+        assert f'"{item.name}"' in builder, item.name
+    for md in sorted(ROOT.glob("*.md")) + sorted((ROOT / "docs").glob("*.md")):
+        text = md.read_text(encoding="utf-8")
+        assert "demo-readonly" not in text, md.relative_to(ROOT)
+        assert not re.search(r"docs/assets/[^)\s]+\.svg", text), md.relative_to(ROOT)
+
+
+def _markdown_without_fences(page: str) -> str:
+    lines = []
+    fence = None
+    for line in page.splitlines():
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if marker:
+            if fence is None:
+                fence = marker.group(1)
+            elif marker.group(1).startswith(fence):
+                fence = None
+            continue
+        if fence is None:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _markdown_anchors(page: Path) -> set[str]:
+    text = _markdown_without_fences(page.read_text(encoding="utf-8"))
+    anchors: set[str] = set()
+    for heading in re.findall(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", text, re.M):
+        slug = re.sub(r"[^\w -]", "", heading.lower()).replace(" ", "-")
+        anchor = slug
+        suffix = 1
+        while anchor in anchors:
+            anchor = f"{slug}-{suffix}"
+            suffix += 1
+        anchors.add(anchor)
+    return anchors
+
+
+def test_markdown_local_links_and_images_resolve() -> None:
+    pages = sorted(ROOT.glob("*.md")) + sorted((ROOT / "docs").glob("*.md"))
+    errors = []
+    for page in pages:
+        prose = _markdown_without_fences(page.read_text(encoding="utf-8"))
+        for is_image, dest in re.findall(r"(!?)\[[^\]\n]*\]\(\s*(<[^>\n]+>|[^\s)]+)(?:[ \t]+[^\n)]*)?\)", prose):
+            url = urlsplit(dest.strip("<>"))
+            if url.scheme or url.netloc:
+                continue
+            link_path = unquote(url.path)
+            candidate = Path(os.path.abspath(page.parent / link_path)) if link_path else page
+            target = candidate.resolve()
+            if not target.is_relative_to(ROOT) or not target.exists() or (is_image and not target.is_file()):
+                errors.append(f"{page.relative_to(ROOT)}: {dest} has no local target")
+                continue
+            if candidate.as_posix() != target.as_posix():
+                errors.append(f"{page.relative_to(ROOT)}: {dest} differs from the canonical path or casing")
+            if url.fragment and target.suffix.lower() == ".md" and unquote(url.fragment) not in _markdown_anchors(target):
+                errors.append(f"{page.relative_to(ROOT)}: {dest} has no matching heading")
+    assert not errors, "\n".join(errors)
+
+
+@pytest.mark.parametrize(
+    "relative, headings, optional_step",
+    [
+        (
+            "README.md",
+            [
+                "Overview",
+                "Key features",
+                "Architecture",
+                "System requirements",
+                "Quick Start",
+                "Usage examples",
+                "Capabilities — 34 tools",
+                "Security & Permissions",
+                "Troubleshooting",
+                "License",
+            ],
+            "#### Step 4 · Plugin Permissions (optional)",
+        ),
+        (
+            "README.vi.md",
+            [
+                "Tổng quan",
+                "Tính năng chính",
+                "Kiến trúc",
+                "Yêu cầu hệ thống",
+                "Bắt đầu nhanh",
+                "Ví dụ sử dụng",
+                "Danh mục chức năng — 34 công cụ",
+                "Bảo mật & Phân quyền",
+                "Xử lý sự cố",
+                "Giấy phép",
+            ],
+            "#### Bước 4 · Quyền Plugin (tùy chọn)",
+        ),
+    ],
+)
+def test_readme_product_standard_layout(relative: str, headings: list[str], optional_step: str) -> None:
+    text = _markdown_without_fences((ROOT / relative).read_text(encoding="utf-8"))
+    h2_headings = re.findall(r"^## +(.+?)\s*$", text, re.M)
+    assert h2_headings == headings, (relative, h2_headings)
+    assert optional_step in text, (relative, optional_step)
 
 
 
@@ -364,13 +517,19 @@ def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
         str(ROOT),
         "-OutputDir",
         str(tmp_path),
-        "-Version",
-        "v0-onboarding-ci",
     ]
-    result = subprocess.run(cmd, cwd=tmp_path, capture_output=True, text=True, timeout=45)
+    result = subprocess.run(cmd, cwd=tmp_path, capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, (result.stdout, result.stderr)
-    with zipfile.ZipFile(tmp_path / "winowner-mcp-v0-onboarding-ci.zip") as archive:
+    package = tmp_path / f"winowner-mcp-{RELEASE_VERSION}.zip"
+    manifest = json.loads((tmp_path / "release-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == RELEASE_VERSION
+    assert manifest["package_name"] == package.name
+    assert manifest["zip_size_bytes"] == package.stat().st_size
+    assert manifest["zip_sha256"].lower() == hashlib.sha256(package.read_bytes()).hexdigest()
+    manifest_files = {entry["relative_path"]: entry for entry in manifest["files"]}
+    with zipfile.ZipFile(package) as archive:
         names = archive.namelist()
+        assert len(names) == len(set(names)), "Duplicate ZIP entries"
         for required in ("go.ps1", "Install-WinOwner.cmd", "Check-WinOwner.cmd",
                          "Uninstall-WinOwner.cmd", "Connect-ChatGPT.cmd", "Disconnect-ChatGPT.cmd", "Grant-OwnerAccess.cmd", "Show-OwnerKey.cmd", "Revoke-OwnerAccess.cmd", "scripts/Check-WinOwner.ps1",
                          "docs/ADVANCED_CHATGPT.vi.md", "docs/AUTH_NONE.vi.md"):
@@ -388,6 +547,20 @@ def test_release_zip_has_portable_entries_and_oneclick(tmp_path: Path) -> None:
         assert all("\\" not in name for name in names)
         assert "config/policy.json" not in names
         assert not any(name.startswith("runtime/secrets/") and not name.endswith(".gitkeep") for name in names)
+        assert archive.testzip() is None
+        errors = []
+        for name, expected in GUIDE_PNG_SHA256.items():
+            relative = f"docs/assets/{name}"
+            if relative not in names or relative not in manifest_files:
+                errors.append(f"{relative}: missing from ZIP or manifest")
+                continue
+            data = archive.read(relative)
+            if hashlib.sha256(data).hexdigest() != expected:
+                errors.append(f"{relative}: ZIP SHA-256 differs from supplied PNG")
+            entry = manifest_files[relative]
+            if entry["sha256"].lower() != expected or entry["size_bytes"] != len(data):
+                errors.append(f"{relative}: release manifest does not match supplied PNG")
+        assert not errors, "\n".join(errors)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell / Scheduled Tasks only")

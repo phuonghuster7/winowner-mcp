@@ -4,7 +4,7 @@
 
 ## 1. Cài đặt
 
-Mở CMD khi bản phát hành tương ứng đã sẵn sàng.
+v1.2.0 chưa được phát hành. Chỉ chạy lệnh dưới đây sau khi xác nhận bản phát hành v1.2.0 đã có trên [GitHub Releases](https://github.com/phuonghuster7/winowner-mcp/releases). Khi đó, mở CMD:
 
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"

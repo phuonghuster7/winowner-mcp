@@ -10,7 +10,7 @@ body:
     id: version
     attributes:
       label: Release/version
-      placeholder: v1.0.0-rc3
+      placeholder: v1.2.0
     validations:
       required: true
   - type: textarea
