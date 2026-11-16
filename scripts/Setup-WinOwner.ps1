@@ -33,7 +33,8 @@ function Write-SetupResult([string]$state, [string]$mode) {
         "Local profile: $mode",
         "ChatGPT connected: NOT YET (connector None is possible with separately authenticated tunnel)",
         "Local MCP: http://127.0.0.1:$Port/mcp",
-        "Next steps: docs\START_HERE.vi.md",
+        "Next steps (English): README.md",
+        "Next steps (Vietnamese): README.vi.md",
         "This file contains no keys or authentication tokens."
     )
     try {
@@ -45,7 +46,8 @@ function Write-SetupResult([string]$state, [string]$mode) {
 function Stop-Setup([string]$message, [int]$exitCode = 1) {
     Write-Host "[WinOwner] ERROR: $message" -ForegroundColor Red
     Write-SetupResult "FAILED ($exitCode)" "UNVERIFIED"
-    Write-Host "[WinOwner] Guide: $guide"
+    Write-Host "[WinOwner] English guide: $(Join-Path $root 'README.md')"
+    Write-Host "[WinOwner] Vietnamese guide: $guide"
     exit $exitCode
 }
 if (-not (Test-Path -LiteralPath $bootstrap -PathType Leaf)) {
@@ -101,7 +103,7 @@ try {
     }
     Write-Host ""
     Write-Host "LOCAL_INSTALL_PASS: protected owner profile ($profile) on http://127.0.0.1:$Port/mcp" -ForegroundColor Green
-    Write-Host "NEXT: ChatGPT connection is NOT active. Follow docs\START_HERE.vi.md." -ForegroundColor Yellow
+    Write-Host "NEXT: ChatGPT connection is NOT active. See README.md (English) or README.vi.md (Vietnamese)." -ForegroundColor Yellow
     Write-Host "NEXT: Add your tunnel in ChatGPT Plugins. Authentication None needs secured backend; owner tools still need verified owner grants." -ForegroundColor Yellow
     Write-Host "No additional windows are launched by this installer."
     Write-SetupResult "LOCAL_INSTALL_PASS" $profile
