@@ -1,16 +1,18 @@
 # WinOwner MCP — bắt đầu
 
+[English](../README.md) | **Tiếng Việt**
+
 ## 1. Cài đặt
 
-Kiểm tra [Releases](https://github.com/phuonghuster7/winowner-mcp/releases). Lệnh bên dưới cần tag v1.2.0; kiểm tra nguồn bộ cài trước khi chạy trong CMD.
+Mở CMD. Lệnh cài đặt dành cho bản v1.2.0 đã phát hành:
 
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
 
-Nhấn **Win + R**, mở thư mục `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`.
+**THÀNH CÔNG**: bộ cài đã tự kiểm tra dịch vụ và xác thực trên máy. **THẤT BẠI**: xem thông báo lỗi. Không tắt phần mềm bảo mật.
 
-Chạy `Check-WinOwner.cmd`. **THÀNH CÔNG**: dịch vụ trên máy sẵn sàng. **THẤT BẠI**: xem thông báo lỗi. Không cần tắt phần mềm bảo mật.
+Ghi chú: lệnh chỉ hoạt động sau khi tag v1.2.0 được phát hành.
 
 ## 2. Kết nối riêng
 
@@ -46,7 +48,9 @@ flowchart LR
   B --> C["ChatGPT gọi tác vụ đọc"]
 ```
 
-## Ngắt kết nối
+## Xử lý sự cố và ngắt kết nối
+
+Chỉ khi cần kiểm tra lỗi dịch vụ: nhấn **Win + R**, mở `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` rồi dùng `Check-WinOwner.cmd`.
 
 `Disconnect-ChatGPT.cmd` ngắt tunnel cục bộ; `Uninstall-WinOwner.cmd` dừng và gỡ dịch vụ đã xác minh. Thu hồi quyền từ tài khoản riêng khi cần. Không tự chuyển Full Control chỉ để sửa lỗi kết nối.
 
