@@ -1,19 +1,61 @@
+<div align="center">
+
 # WinOwner MCP v1.2.0
 
-Kết nối máy Windows 10/11 của bạn với ChatGPT để thực hiện tác vụ đọc đã được cho phép.
+**Không gian làm việc Windows của bạn, ngay trong ChatGPT.**
+
+MCP gateway mã nguồn mở cho Windows, hỗ trợ đọc workspace, phát triển phần mềm và quản lý tác vụ theo quyền được cấp.
+
+Windows 10/11 · Model Context Protocol · MIT
 
 [English](README.md) | **Tiếng Việt**
 
-[Hướng dẫn kỹ thuật](docs/ADVANCED_CHATGPT.vi.md)
+[Bắt đầu](#cài-đặt-và-kết-nối) · [Tính năng](#tính-năng) · [Kiến trúc](#kiến-trúc) · [Danh sách tool](docs/CAPABILITIES.md) · [Xử lý lỗi](docs/TROUBLESHOOTING.md)
+
+</div>
+
+## Vì sao dùng WinOwner?
+
+WinOwner hoạt động trên chính máy Windows của bạn, thay vì thay thế workspace bằng máy ảo cloud. Kết nối riêng, xác thực và phân quyền tại server. Mặc định chỉ đọc; thao tác nhạy cảm cần quyền riêng.
+
+## Tính năng
+
+| Tính năng | Lợi ích |
+|---|---|
+| Cài đặt cho Windows | Một lệnh cài local, tự kiểm tra dịch vụ và xác thực |
+| Workspace và Git | Đọc thư mục, tệp văn bản, trạng thái và thay đổi Git trong phạm vi được phép |
+| Lập trình | Chỉnh sửa và kiểm thử trong phạm vi được cấp quyền |
+| Quản lý tác vụ | Xem trạng thái, nhật ký, diff và kết quả; điều phối cần quyền riêng |
+| Tích hợp Desktop | Các chức năng trong danh mục owner, tùy danh tính, chính sách và phiên Windows |
+| Quản lý kết nối | Kiểm tra local, ngắt tunnel và gỡ cài đặt |
+
+## Kiến trúc
 
 ```mermaid
 flowchart TD
-  A["1 · Cài WinOwner"] --> B["2 · Kết nối riêng"]
-  B --> C["3 · Thêm plugin ChatGPT"]
-  C --> D["4 · Kiểm tra chỉ đọc"]
+  C["ChatGPT"] <--> T["OpenAI Secure MCP Tunnel"]
+  subgraph W["Máy Windows của bạn"]
+    A["Tunnel client"] <--> G["MCP gateway cục bộ"]
+    G --> P["Xác thực và phân quyền"]
+    P --> F["Workspace được phép"]
+    P --> J["Lập trình và tác vụ"]
+    P --> D["Giới hạn quyền Desktop"]
+  end
+  T <--> A
 ```
 
-## 1. Cài đặt
+Gateway cục bộ không được thiết kế để công khai ra Internet. Tunnel cần HTTPS đi ra ngoài; máy Windows và dịch vụ liên quan phải hoạt động. Gateway không tự nâng quyền Windows.
+
+## Yêu cầu
+
+- Windows 10/11 x64 và Windows PowerShell 5.1.
+- Python 3.12; bộ cài có thể cài qua winget nếu khả dụng.
+- Internet, tài khoản/workspace ChatGPT có quyền thêm custom MCP server và quyền tunnel tương ứng trên Platform.
+- Phiên người dùng Windows; các chức năng tương tác Desktop có điều kiện phiên riêng.
+
+## Cài đặt và kết nối
+
+### 1. Cài đặt
 Mở Command Prompt (CMD) trên Windows. Lệnh cài đặt dành cho bản v1.2.0 đã phát hành:
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
@@ -22,14 +64,24 @@ Bộ cài tự kiểm tra dịch vụ và xác thực trên máy. Khi cài đặ
 
 > Lệnh này chỉ hoạt động sau khi tag v1.2.0 được phát hành. [Các bản phát hành](https://github.com/phuonghuster7/winowner-mcp/releases).
 
-## 2. Kết nối riêng
+### 2. Kết nối riêng
 Xem [hướng dẫn Secure MCP Tunnel chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). Cần phân biệt **Tunnel ID** (mã đường kết nối) và **runtime API key** (khóa xác thực). Tiện ích cấu hình hiện có: `Connect-ChatGPT.cmd`. Không gửi khóa qua chat.
 
-## 3. Tạo plugin ChatGPT
-Xem [hướng dẫn tạo plugin của OpenAI](https://developers.openai.com/api/docs/guides/custom-mcp-server). Kiểm tra quyền được yêu cầu, giữ chế độ chỉ đọc ban đầu. Authentication không thay thế xác minh chủ máy.
+### 3. Tạo plugin ChatGPT
+Xem [hướng dẫn tạo plugin của OpenAI](https://developers.openai.com/plugins/deploy/connect-chatgpt). Kiểm tra quyền được yêu cầu, giữ chế độ chỉ đọc ban đầu. Authentication không thay thế xác minh chủ máy.
 
-## 4. Kiểm tra kết nối
+### 4. Kiểm tra kết nối
 Máy hoạt động ≠ tunnel sẵn sàng ≠ ChatGPT kết nối thành công. Kiểm tra bằng một tác vụ đọc không nhạy cảm.
+
+## Ví dụ sử dụng
+
+Sau khi kết nối, thử với workspace kiểm thử đã được phép:
+
+- "Liệt kê các workspace đã được phê duyệt."
+- "Tóm tắt trạng thái Git dự án, không sửa bất kỳ tệp nào."
+- "Cho biết trạng thái tác vụ hiện có."
+
+Đây là ví dụ yêu cầu, không phải ảnh chụp hoặc kết quả nghiệm thu trực tiếp.
 
 ## Chức năng & quyền truy cập
 
@@ -44,6 +96,10 @@ Danh mục cloud gồm **14 tool cơ bản, tối đa 34 tool khi đủ điều 
 
 [Xem danh sách 34 tool và mô hình quyền](docs/CAPABILITIES.md).
 
+## Bảo mật và phân quyền
+
+Mặc định chỉ đọc; thấy tool không có nghĩa được phép thực thi. Khóa tunnel không xác minh danh tính owner. Quyền Windows vẫn được áp dụng; thực thi đặc quyền không phải sandbox hệ điều hành. Xem [bảo mật](SECURITY.md) và [mô hình quyền](docs/CAPABILITIES.md).
+
 ## Quản lý
 - `Disconnect-ChatGPT.cmd`: ngắt tunnel đã xác minh.
 - `Uninstall-WinOwner.cmd`: dừng và gỡ dịch vụ.
@@ -52,5 +108,22 @@ Danh mục cloud gồm **14 tool cơ bản, tối đa 34 tool khi đủ điều 
 Chỉ khi cần xử lý lỗi, dùng `Check-WinOwner.cmd` trong `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`.
 
 [Hướng dẫn người mới](docs/START_HERE.vi.md) · [Cài đặt và sửa lỗi](docs/INSTALLATION.md) · [Bảo mật](SECURITY.md)
+
+## Xử lý sự cố
+
+| Tình trạng | Kiểm tra |
+|---|---|
+| Cài đặt local lỗi | Đọc kết quả cài đặt và thông tin chẩn đoán local |
+| Tunnel không khả dụng | Kiểm tra kết nối và điều kiện tài khoản/workspace |
+| Tool từ chối | Kiểm tra phạm vi đã cấp; không bỏ xác thực |
+| Cần ngắt kết nối | Dùng tiện ích ngắt local và kiểm tra quyền từ xa riêng |
+
+Xem thêm [hướng dẫn xử lý lỗi](docs/TROUBLESHOOTING.md).
+
+## Thông tin dự án
+
+[Bản phát hành](https://github.com/phuonghuster7/winowner-mcp/releases) · [Lịch sử CI](https://github.com/phuonghuster7/winowner-mcp/actions) · [Đóng góp](CONTRIBUTING.md) · [Giấy phép](LICENSE)
+
+CI không thay thế nghiệm thu ghép nối ChatGPT thực tế hay chứng nhận an toàn trên mọi máy.
 
 MIT · Dự án độc lập với OpenAI và Microsoft.
