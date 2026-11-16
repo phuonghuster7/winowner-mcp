@@ -67,3 +67,7 @@ obtained trusted archive SHA-256 can be supplied as ExpectedArchiveSha256 when r
 go.ps1; a tag and HTTPS alone are not an independent integrity check. A rollback is
 reported as verified only after the old local service passes health and authentication
 checks. Remote pairing remains a separate check.
+
+## Maintainer release alignment
+
+Keep the version pinned to an explicitly reviewed release. When preparing a new release, update the installer default ref, display version, install directory, both READMEs, the beginner guide and `SECURITY.md` together. The onboarding tests check version drift and referenced documentation assets. Passing those checks is not proof that the GitHub tag exists or that a real Windows/ChatGPT connection has been accepted; verify both before publication. Do not silently download or execute unreviewed branch HEADs.
