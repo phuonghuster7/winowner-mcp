@@ -4,7 +4,7 @@
 
 ## 1. Cài đặt
 
-Mở CMD. Lệnh cài đặt dành cho bản v1.2.0 đã phát hành:
+Mở CMD khi bản phát hành tương ứng đã sẵn sàng.
 
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
@@ -15,6 +15,8 @@ powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0
 Ghi chú: lệnh chỉ hoạt động sau khi tag v1.2.0 được phát hành.
 
 ## 2. Kết nối riêng
+
+[Xem hình minh họa và liên kết trong README tiếng Việt](../README.vi.md#kết-nối-chatgpt).
 
 Đọc [hướng dẫn Secure MCP Tunnel của OpenAI](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). Chỉ sử dụng tài khoản và workspace được phép kết nối.
 
@@ -34,12 +36,16 @@ Xem [hướng dẫn thêm custom MCP server của OpenAI](https://developers.ope
 
 Authentication None không có nghĩa là bỏ xác thực phía máy; HTTP 401 có thể xuất hiện khi chưa được cấp quyền. Ghép nối owner qua OAuth là luồng riêng, chưa nghiệm thu thực tế.
 
-## 4. Kiểm tra kết nối
+## 4. Quyền plugin (tùy chọn)
+
+`Allow all tools` giảm yêu cầu xác nhận nhưng tăng rủi ro, không cấp quyền owner và không bắt buộc để kết nối. Giữ xác nhận cho thao tác nhạy cảm.
+
+## 5. Kiểm tra kết nối
 
 | Kết quả | Ý nghĩa |
 |---|---|
-| CHECK_PASS | Máy Windows sẵn sàng |
-| TUNNEL_READY | Đường kết nối sẵn sàng |
+| LOCAL_INSTALL_PASS / CHECK_PASS | Dịch vụ và xác thực cục bộ |
+| TUNNEL_SETUP_PASS / TUNNEL_READY | Tunnel sẵn sàng tại máy |
 | ChatGPT trả kết quả từ tác vụ đọc thử | Kết nối được kiểm tra thực tế |
 
 ```mermaid
