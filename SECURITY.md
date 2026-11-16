@@ -2,7 +2,7 @@
 
 ## Supported status
 
-The active source candidate is **v1.0.0-rc3**. This release candidate is not a public security certification; no promise is made to maintain older internal versions.
+The source on this development branch targets **v1.2.0**. A version in source is not a published release; consult [GitHub Releases](https://github.com/phuonghuster7/winowner-mcp/releases) for published artifacts. The legacy v1.0.0-rc3 candidate does not establish support for older internal builds. Neither a release nor CI is a public security certification.
 
 ## Private vulnerability disclosure
 
