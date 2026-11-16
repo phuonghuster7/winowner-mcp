@@ -56,7 +56,7 @@ The local gateway is not intended to be exposed publicly. The tunnel requires ou
 ## Quick start
 
 ### Install locally
-Open Windows Command Prompt (CMD).
+Open Windows Command Prompt (CMD) when the matching release is available.
 ```cmd
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
@@ -80,7 +80,7 @@ Use an approved organization and workspace. The diagrams below are illustrations
 
 ![Private tunnel: use an approved organization and workspace](docs/assets/guide-02-en.svg)
 
-The local connection utility is `Connect-ChatGPT.cmd`. The runtime key and Tunnel ID have different purposes. Never share the key in chat or screenshots.
+The local connection utility is `Connect-ChatGPT.cmd`. The runtime key authenticates the tunnel client, while the Tunnel ID identifies the connection. Never share the key in chat or screenshots.
 
 #### 3 · ChatGPT plugin
 
@@ -88,7 +88,7 @@ The local connection utility is `Connect-ChatGPT.cmd`. The runtime key and Tunne
 
 ![Plugin: review authentication and the requested access](docs/assets/guide-03-en.svg)
 
-Authentication settings must match the verified server configuration. Tunnel access does not establish owner identity.
+Authentication settings must match the verified server configuration. Keep the initial access read-only; tunnel access does not establish owner identity.
 
 #### 4 · Plugin permissions (optional)
 
@@ -96,7 +96,13 @@ Review the available approval settings. `Allow all tools` reduces confirmation p
 
 ### Verify the connection
 
-Local installation, tunnel readiness and a successful ChatGPT tool call are separate checks. Confirm using a harmless read-only request against an approved test workspace.
+| Result | What is verified |
+|---|---|
+| `LOCAL_INSTALL_PASS` / `CHECK_PASS` | Local service and authentication checks |
+| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Local tunnel readiness |
+| Successful read-only request | Actual ChatGPT connection for that request |
+
+These checks are distinct. Confirm using a harmless read-only request against an approved test workspace.
 
 ## Example prompts
 
@@ -138,7 +144,7 @@ The server defaults to read-only. A listed tool is not necessarily authorized to
 
 For troubleshooting only, use `Check-WinOwner.cmd` in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`.
 
-[Installation and repair](docs/INSTALLATION.md) · [Security](SECURITY.md) · [Quick guide](docs/START_HERE.vi.md)
+[Installation and repair](docs/INSTALLATION.md) · [Security](SECURITY.md) · [Vietnamese quick guide](docs/START_HERE.vi.md)
 
 ## Troubleshooting
 
