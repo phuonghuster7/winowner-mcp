@@ -124,6 +124,8 @@ Danh mục cloud gồm **14 tool cơ bản, tối đa 34 tool khi đủ điều 
 
 Mặc định chỉ đọc; thấy tool không có nghĩa được phép thực thi. Khóa tunnel không xác minh danh tính owner. Quyền Windows vẫn được áp dụng; thực thi đặc quyền không phải sandbox hệ điều hành. Xem [bảo mật](SECURITY.md) và [mô hình quyền](docs/CAPABILITIES.md).
 
+Thiết lập `Allow all tools` trong ChatGPT là **tùy chọn**, **không bắt buộc** để kết nối và **không cấp quyền owner**; tùy chọn này tăng rủi ro vì giảm yêu cầu xác nhận. Nên bắt đầu chỉ đọc, xác nhận riêng những thao tác nhạy cảm. [Tài liệu OpenAI](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt).
+
 ## Quản lý
 - `Disconnect-ChatGPT.cmd`: ngắt tunnel đã xác minh.
 - `Uninstall-WinOwner.cmd`: dừng và gỡ dịch vụ.
