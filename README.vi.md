@@ -32,16 +32,14 @@ WinOwner MCP kết nối máy Windows của chính bạn với ChatGPT thông qu
 ## Kiến trúc
 
 ```mermaid
-flowchart TD
-  C["ChatGPT"] <--> T["OpenAI Secure MCP Tunnel"]
-  subgraph W["Máy Windows của bạn"]
-    A["tunnel-client (HTTPS đi ra)"] <--> G["MCP gateway cục bộ (127.0.0.1:8768)"]
-    G --> P["Xác thực, OAuth & chính sách"]
-    P --> F["Workspace được cấp phép"]
-    P --> J["Dịch vụ tác vụ & lập trình"]
-    P --> D["Ranh giới quyền Desktop"]
-  end
-  T <--> A
+flowchart LR
+  C["ChatGPT"] --> T["Secure MCP Tunnel"]
+  T --> A["Tunnel client trên Windows"]
+  A --> G["MCP gateway cục bộ"]
+  G --> P["Xác thực và chính sách"]
+  P --> F["Workspace được cấp phép"]
+  P --> J["Tác vụ và lập trình"]
+  P --> D["Desktop theo quyền"]
 ```
 
 - Gateway cục bộ chỉ bind `127.0.0.1`, không thiết kế để mở trực tiếp ra mạng công cộng.
