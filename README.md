@@ -32,16 +32,14 @@ WinOwner MCP connects your own Windows workstation to ChatGPT over an authentica
 ## Architecture
 
 ```mermaid
-flowchart TD
-  C["ChatGPT"] <--> T["OpenAI Secure MCP Tunnel"]
-  subgraph W["Your Windows workstation"]
-    A["tunnel-client (outbound HTTPS)"] <--> G["Local MCP gateway (127.0.0.1:8768)"]
-    G --> P["Authentication, OAuth & policy"]
-    P --> F["Approved workspaces"]
-    P --> J["Task & coding services"]
-    P --> D["Desktop capability boundary"]
-  end
-  T <--> A
+flowchart LR
+  C["ChatGPT"] --> T["Secure MCP Tunnel"]
+  T --> A["Windows tunnel client"]
+  A --> G["Local MCP gateway"]
+  G --> P["Authentication and policy"]
+  P --> F["Approved workspaces"]
+  P --> J["Tasks and coding"]
+  P --> D["Desktop capabilities"]
 ```
 
 - The local gateway binds to `127.0.0.1` only and is never intended to be exposed directly on public interfaces.
