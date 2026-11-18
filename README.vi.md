@@ -78,7 +78,7 @@ Sử dụng đúng OpenAI organization và ChatGPT workspace được cấp phé
 ![Bước 1 — Tạo runtime API key: đặt tên key, kiểm tra kỹ quyền và chỉ dùng cho tunnel client trên máy](docs/assets/guide-01-vi.png)
 
 1. **Đặt tên key:** nhập tên dễ nhận biết như `WinOwner MCP Runtime`.
-2. **Kiểm tra quyền (lưu ý bảo mật):** dù ảnh minh họa đánh dấu `All`, **không khuyến nghị cấp toàn quyền API (`All`) làm mặc định** nếu tổ chức hỗ trợ `Restricted` theo phạm vi tunnel—chỉ cấp quyền tối thiểu cần thiết cho tunnel và không dùng khóa quản trị tổ chức cho daemon.
+2. **Quyền API:** ảnh đang chọn `All` **để minh họa giao diện, không phải quyền bắt buộc**. Khi tạo khóa runtime thực tế, nên chọn `Restricted` với quyền **Tunnels Read + Use** nếu tài khoản hỗ trợ; quyền tạo hoặc sửa tunnel (**Tunnels Read + Manage**) dành riêng cho người quản trị được phép. `All` cấp quyền API rộng hơn nhu cầu của tunnel client. Xem [phân quyền chính thức của OpenAI](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
 3. **Tạo key:** bấm **Create secret key** và giữ khóa riêng tư (chỉ dùng cho `tunnel-client` trên máy; tuyệt đối không dán khóa vào khung chat, Git hoặc ảnh chụp màn hình).
 
 #### Bước 2 · Tạo Tunnel riêng
