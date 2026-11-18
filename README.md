@@ -78,7 +78,7 @@ Use an approved OpenAI organization and ChatGPT workspace. The four illustrated 
 ![Step 1 — Create runtime API key: name it, review permissions carefully, and use it only for the local tunnel client](docs/assets/guide-01-en.png)
 
 1. **Name the key:** enter a recognizable name such as `WinOwner MCP Runtime`.
-2. **Review permissions (important):** although the UI example highlights `All`, **do not grant full API permissions (`All`) by default** if your organization supports `Restricted` tunnel-scoped permissions—select the minimum permissions required for the tunnel and never use an organization admin key for the runtime daemon.
+2. **API permissions:** the screenshot shows `All` as a **demo selection, not a requirement**. For an actual runtime key, choose `Restricted` with **Tunnels Read + Use** when available; creating or editing the tunnel is a separate permission (**Tunnels Read + Manage**) for the authorized administrator. `All` grants broader API access than this tunnel client needs. See the [OpenAI permission requirements](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels).
 3. **Create the key:** click **Create secret key** and keep it private (use it for the local `tunnel-client` only; never paste the key in chat messages, Git commits, or screenshots).
 
 #### Step 2 · Create a Private Tunnel
