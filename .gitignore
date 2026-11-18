@@ -23,7 +23,11 @@ env/
 *.kdbx
 *.dpapi
 runtime/secrets/
+config/policy.json
+config/trusted_workspaces.json
+config/tunnel-autonomous.json
 config/tunnel-autonomous.yaml
+!config/tunnel-autonomous.example.json
 !config/tunnel-autonomous.example.yaml
 
 # Mutable runtime logs, locks, jobs, and temporary artifacts

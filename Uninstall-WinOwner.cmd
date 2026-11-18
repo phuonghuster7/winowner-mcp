@@ -11,7 +11,7 @@ if not exist "%WINOWNER_BOOTSTRAP%" (
     set "RESULT=2"
     goto finish
 )
-"%WINOWNER_PS%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%WINOWNER_BOOTSTRAP%" -Remove %*
+"%WINOWNER_PS%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%WINOWNER_BOOTSTRAP%" -Remove -DisconnectTunnel %*
 set "RESULT=%ERRORLEVEL%"
 if not "%RESULT%"=="0" (
     echo [THẤT BẠI] Không thể gỡ dịch vụ an toàn. Xem docs\ADVANCED_CHATGPT.vi.md.
@@ -19,7 +19,7 @@ if not "%RESULT%"=="0" (
     echo [THÀNH CÔNG] Dịch vụ cục bộ đã dừng và bỏ tự khởi động.
     echo Để ngừng quyền truy cập ChatGPT, hãy ngắt kết nối trong ChatGPT.
     echo Dữ liệu và khóa trên máy được giữ lại cho chủ máy.
-    >"%~dp0WinOwner-SETUP-RESULT.txt" echo WinOwner MCP local service removed. Secrets preserved.
+    >"%~dp0WinOwner-SETUP-RESULT.txt" echo WinOwner MCP local service and tunnel task removal checked. Secrets preserved.
 )
 :finish
 if "%~1"=="" (

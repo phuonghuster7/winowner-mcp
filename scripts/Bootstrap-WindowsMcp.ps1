@@ -11,12 +11,15 @@ param(
     [switch]$NoPythonInstall,
     [switch]$OwnerFullControl,
     [switch]$Remove,
+    [switch]$DisconnectTunnel,
+    [switch]$TunnelOnly,
     [ValidateRange(1024,65535)][int]$Port = 8768
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $venv = Join-Path $root ".venv\Scripts\python.exe"
+$pythonWindowless = Join-Path $root ".venv\Scripts\pythonw.exe"
 $runner = Join-Path $root "scripts\Run-WinOwnerMcp.py"
 $adapter = Join-Path $root "mcp-gateway\cloud_autonomous_adapter.py"
 $policyExample = Join-Path $root "config\policy.example.json"
@@ -57,7 +60,7 @@ function Managed-Task {
         $a = @($t.Actions)
         if ($a.Count -ne 1 -or -not $a[0].Arguments -or
             $a[0].Arguments.IndexOf($runner, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
-            $a[0].Execute.IndexOf($venv, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+            (@($venv, $pythonWindowless) -notcontains $a[0].Execute) -or
             @($identity, $env:USERNAME, ("$env:USERDOMAIN\$env:USERNAME")) -notcontains $t.Principal.UserId) {
             throw "Task name collision for $taskName; refusing to modify another task."
         }
@@ -100,8 +103,53 @@ function Stop-VerifiedLocalListener {
         Stop-Process -Id $listener.OwningProcess -Force -ErrorAction Stop
     }
 }
+if ($DisconnectTunnel -and -not $Remove) { throw 'DisconnectTunnel requires Remove.' }
+if ($TunnelOnly -and (-not $Remove -or -not $DisconnectTunnel)) {
+    throw 'TunnelOnly requires Remove and DisconnectTunnel.'
+}
+if ($TunnelOnly -and $DryRun) {
+    Step 'TUNNEL_DISCONNECT_DRY_RUN: no service or task changed.'
+    exit 0
+}
 if ($Remove) {
-    $task = Managed-Task
+    $task = $null
+    if (-not $TunnelOnly) { $task = Managed-Task }
+    if ($DisconnectTunnel) {
+        # Explicit uninstall only; upgrade and profile changes use Remove alone.
+        $tunnelTaskName = "WinOwnerTunnel-$Port"
+        $tunnelTask = Get-ScheduledTask -TaskName $tunnelTaskName -TaskPath '\' -ErrorAction SilentlyContinue
+        if ($tunnelTask) {
+            $tunnelAction = @($tunnelTask.Actions)
+            $tunnelRunner = Join-Path $PSScriptRoot "Run-WinOwnerTunnel.ps1"
+            $expectedArgs = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$tunnelRunner+'"'
+            if ($tunnelAction.Count -ne 1 -or
+                $tunnelAction[0].Execute -ne (Join-Path $PSHOME 'powershell.exe') -or
+                $tunnelAction[0].Arguments -ne $expectedArgs -or
+                $tunnelAction[0].WorkingDirectory -ne $root -or
+                @($identity, $env:USERNAME, ("$env:USERDOMAIN\$env:USERNAME")) -notcontains $tunnelTask.Principal.UserId) {
+                throw "Task name collision for $tunnelTaskName; refusing to modify another task."
+            }
+            Stop-ScheduledTask -TaskName $tunnelTaskName -TaskPath '\' -ErrorAction SilentlyContinue
+            $until = [DateTime]::UtcNow.AddSeconds(10)
+            do {
+                $state = (Get-ScheduledTask -TaskName $tunnelTaskName -TaskPath '\' -ErrorAction Stop).State
+                if ($state -notin @('Running','Queued')) { break }
+                Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $until)
+            if ($state -in @('Running','Queued')) { throw 'Tunnel task did not stop; no tunnel removal was reported.' }
+            Unregister-ScheduledTask -TaskName $tunnelTaskName -TaskPath '\' -Confirm:$false -ErrorAction Stop
+            if (Get-ScheduledTask -TaskName $tunnelTaskName -TaskPath '\' -ErrorAction SilentlyContinue) {
+                throw 'Tunnel task removal could not be verified.'
+            }
+            Step "TUNNEL_TASK_REMOVED: $tunnelTaskName. Revoke remote access separately if required."
+        } else {
+            Step "TUNNEL_TASK_NOT_FOUND: $tunnelTaskName"
+        }
+    }
+    if ($TunnelOnly) {
+        Step 'TUNNEL_DISCONNECT_COMPLETE: local MCP service unchanged; remote access revocation is separate.'
+        exit 0
+    }
     if ($task) {
         Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
@@ -175,11 +223,11 @@ if ($NoStart) { Step "LOCAL_PREPARED: no task started or registered"; exit 0 }
 $created = $false
 if (-not $task) {
     $arguments = ('-u "{0}" --port {1} --profile {2}' -f $runner, $Port, $profile)
-    $action = New-ScheduledTaskAction -Execute $venv -Argument $arguments -WorkingDirectory $root
+    $action = New-ScheduledTaskAction -Execute $pythonWindowless -Argument $arguments -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
     $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "WinOwner MCP read-only local adapter, current-user logon" | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description "WinOwner MCP authenticated local adapter, current-user logon" | Out-Null
     $created = $true
 }
 try {

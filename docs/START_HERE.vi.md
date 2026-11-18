@@ -1,29 +1,63 @@
-# WinOwner MCP 1.1.0 — bắt đầu cho người mới
+# WinOwner MCP — bắt đầu
 
-## Bước 1 — Kiểm tra quyền ChatGPT
+[English](../README.md) | **Tiếng Việt**
 
-Mở **ChatGPT web → Plugins → + → Add custom MCP server**. Muốn AI ghi/sửa file Windows, workspace phải hỗ trợ **full MCP**; OpenAI hiện ghi nhận Business, Enterprise/Edu. Không thấy mục thêm server thì phải kiểm tra quyền tài khoản trước khi ghép nối.
+## 1. Cài đặt
 
-## Bước 2 — Copy một dòng vào CMD
+v1.2.0 chưa được phát hành. Chỉ chạy lệnh dưới đây sau khi xác nhận bản phát hành v1.2.0 đã có trên [GitHub Releases](https://github.com/phuonghuster7/winowner-mcp/releases). Khi đó, mở CMD:
 
-Nhấn **Start**, tìm **cmd**, mở **Command Prompt**, dán rồi Enter:
+```cmd
+powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
+```
 
-    powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/main/go.ps1|iex"
+**THÀNH CÔNG**: bộ cài đã tự kiểm tra dịch vụ và xác thực trên máy. **THẤT BẠI**: xem thông báo lỗi. Không tắt phần mềm bảo mật.
 
-Bộ cài tải và cài Windows. **THÀNH CÔNG** = phần cục bộ đã chạy, **chưa phải ChatGPT kết nối**. **THẤT BẠI** = đọc lý do trên màn hình, không tắt bảo vệ Windows.
+Ghi chú: lệnh chỉ hoạt động sau khi tag v1.2.0 được phát hành.
 
-## Bước 3 — Nhấp đúp để kiểm tra
+## 2. Kết nối riêng
 
-Nhấn **Win + R**, dán dòng dưới rồi Enter:
+[Xem hình minh họa và liên kết trong README tiếng Việt](../README.vi.md#kết-nối-chatgpt).
 
-    %LOCALAPPDATA%\WinOwnerMCP\v1.1.0
+Đọc [hướng dẫn Secure MCP Tunnel của OpenAI](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels). Chỉ sử dụng tài khoản và workspace được phép kết nối.
 
-Nhấp đúp **Check-WinOwner.cmd**. Dòng THÀNH CÔNG xác nhận dịch vụ cục bộ chạy và từ chối truy cập chưa xác thực. **Uninstall-WinOwner.cmd** dừng dịch vụ và bỏ tự khởi động, giữ lại file và khóa.
+```mermaid
+flowchart LR
+  A["Tunnel ID<br/>Mã định danh"] --> C["Kết nối riêng"]
+  B["Runtime API key<br/>Khóa xác thực"] --> C
+```
 
-## Bước 4 — Ghép nối ChatGPT
+*Hình trên là sơ đồ minh họa, không phải ảnh chụp giao diện.*
 
-Lần đầu cần quyền tunnel trên OpenAI Platform và xác nhận OAuth trong ChatGPT; không thể thay thế bằng một lệnh CMD. [Hướng dẫn dành cho người có quyền quản trị](ADVANCED_CHATGPT.vi.md).
+Hai giá trị này có mục đích khác nhau; không phải hai API key. Tiện ích hiện có là `Connect-ChatGPT.cmd`. Không chia sẻ khóa hoặc ảnh màn hình chứa khóa.
 
-**Kiểm tra cuối:** chọn plugin WinOwner trong ChatGPT và gọi công cụ đọc trạng thái hệ thống. Chỉ có phản hồi thật từ công cụ mới chứng minh đã kết nối.
+## 3. Plugin ChatGPT
 
-Nếu thiếu Python 3.12, có thể cài từ python.org; nếu cổng 8768 bận, không tự dừng dịch vụ lạ. Không nên tắt SmartScreen hoặc Defender để vượt cảnh báo.
+Xem [hướng dẫn thêm custom MCP server của OpenAI](https://developers.openai.com/api/docs/guides/custom-mcp-server). Kiểm tra thông tin plugin và quyền truy cập được yêu cầu. Giữ chế độ chỉ đọc để nghiệm thu.
+
+Authentication None không có nghĩa là bỏ xác thực phía máy; HTTP 401 có thể xuất hiện khi chưa được cấp quyền. Ghép nối owner qua OAuth là luồng riêng, chưa nghiệm thu thực tế.
+
+## 4. Quyền plugin (tùy chọn)
+
+`Allow all tools` giảm yêu cầu xác nhận nhưng tăng rủi ro, không cấp quyền owner và không bắt buộc để kết nối. Giữ xác nhận cho thao tác nhạy cảm.
+
+## 5. Kiểm tra kết nối
+
+| Kết quả | Ý nghĩa |
+|---|---|
+| LOCAL_INSTALL_PASS / CHECK_PASS | Dịch vụ và xác thực cục bộ |
+| TUNNEL_SETUP_PASS / TUNNEL_READY | Tunnel sẵn sàng tại máy |
+| ChatGPT trả kết quả từ tác vụ đọc thử | Kết nối được kiểm tra thực tế |
+
+```mermaid
+flowchart LR
+  A["Máy sẵn sàng"] --> B["Tunnel sẵn sàng"]
+  B --> C["ChatGPT gọi tác vụ đọc"]
+```
+
+## Xử lý sự cố và ngắt kết nối
+
+Chỉ khi cần kiểm tra lỗi dịch vụ: nhấn **Win + R**, mở `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` rồi dùng `Check-WinOwner.cmd`.
+
+`Disconnect-ChatGPT.cmd` ngắt tunnel cục bộ; `Uninstall-WinOwner.cmd` dừng và gỡ dịch vụ đã xác minh. Thu hồi quyền từ tài khoản riêng khi cần. Không tự chuyển Full Control chỉ để sửa lỗi kết nối.
+
+[Tài liệu kỹ thuật](ADVANCED_CHATGPT.vi.md) · [Sửa lỗi](TROUBLESHOOTING.md) · [Bảo mật](../SECURITY.md)

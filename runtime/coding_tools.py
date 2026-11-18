@@ -546,7 +546,10 @@ class CodingToolHandler:
         try:
             policy = getattr(self.broker, "policy", None)
             allowed_roots = getattr(policy, "allowed_roots", None)
+            principal = self._req_ctx().get("auth_principal")
             is_unrestricted = bool(policy and getattr(policy, "unrestricted_workspace_access", False))
+            if principal is not None and not getattr(principal, "is_owner", False):
+                is_unrestricted = False
             tool_name = str(self._req_ctx().get("tool_name") or "")
             has_owner_global = (
                 tool_name == "agent_workspace_list"
@@ -622,7 +625,10 @@ class CodingToolHandler:
         root = candidate.resolve()
         policy = getattr(self.broker, "policy", None)
         allowed_roots = getattr(policy, "allowed_roots", None)
+        principal = self._req_ctx().get("auth_principal")
         is_unrestricted = bool(policy and getattr(policy, "unrestricted_workspace_access", False))
+        if principal is not None and not getattr(principal, "is_owner", False):
+            is_unrestricted = False
         if is_unrestricted:
             if allowed_roots:
                 in_allowed = any(root == Path(ar).resolve() or root.is_relative_to(Path(ar).resolve()) for ar in allowed_roots)
