@@ -21,16 +21,16 @@ RELEASE_VERSION = "v1.2.0"
 # Ensure child Windows PowerShell 5.1 processes do not inherit PowerShell 7 PSModulePath from pwsh CI runners.
 os.environ.pop("PSModulePath", None)
 
-# SHA-256 of the eight PNG entries in the supplied WinOwner_8_images.zip.
+# SHA-256 of the eight PNG entries in the supplied WinOwner_v1.2_APPROVED_8_UI_images.zip.
 GUIDE_PNG_SHA256 = {
-    "guide-01-en.png": "6f6e031b9953fd0784dbe346a717fc42759244c5626bf307885ab79f540fb3a4",
-    "guide-01-vi.png": "3f2216a1f944a32523a370c034b55cc4996d9ac45a1d6f171a14a4adc067e8d3",
-    "guide-02-en.png": "31b6b7b5f3fc326fa7e1fbcdd0566c64d946250c4d5a72ac4dbcfb555516f098",
-    "guide-02-vi.png": "c694cce04353ed24849e8b4ae01918278b17d97ba69972ba293b0cc48de24fbb",
-    "guide-03-en.png": "388374984ab5c4ac1020504138a80f978f3b0ed67ba3e643a8dfae7a02c988e7",
-    "guide-03-vi.png": "7b31f74284260481ad6edd894f1b89c471558c1cc69c1fa35d342cbd1b0d6b19",
-    "guide-04-en.png": "a834090286e6fd0dbf49f8bdc1231ac4b4d30d7052bc14c25f28fc08b80d3076",
-    "guide-04-vi.png": "fb3b039eb3de6b78363e99d95f45b701ed868ca347fca9874152121f1fff385e",
+    "guide-01-en.png": "0c48ef3147bbb482c230ccb41dc47af3700198f275db1665bf5c6a959066aeab",
+    "guide-01-vi.png": "fa806fcd571567236529b50703308c2a053f53d52edba4a6fd0a2c44fb5b83e5",
+    "guide-02-en.png": "eab29c807891118e23e619d2f7920849dfdc29aa2d463bf76321faf04f5a7f6c",
+    "guide-02-vi.png": "5745360e21c38142a513236d24a78cf3e91a274efd6bb5382da5ae85ccaddaa1",
+    "guide-03-en.png": "e6e619ce5f26b617f3cd624e5189fa5f3b17d00ff0df64607112365489858176",
+    "guide-03-vi.png": "1a71a0d555ab5695ff9366a0e8f317eb498b853f60583b6f3b5ede3d365a62ed",
+    "guide-04-en.png": "ce335ca0f10d549d213ab6067fde54733fb525c5d3703e7e432431108e5e4ee6",
+    "guide-04-vi.png": "913ecac7bf51109440ea1872f294acc3d8d82328b19bb55b915510cfe5395330",
 }
 
 

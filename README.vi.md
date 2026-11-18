@@ -69,29 +69,27 @@ Mặc định, WinOwner cài đặt vào `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` ở
 
 ### Kết nối ChatGPT
 
-Sử dụng đúng OpenAI organization và ChatGPT workspace được cấp phép. Bốn hình dưới đây là minh họa đã ẩn định danh cá nhân (`Thông tin riêng đã ẩn`), không phải ảnh chụp trực tiếp tài khoản thật.
+Sử dụng đúng OpenAI organization và ChatGPT workspace được cấp phép. Bốn hình hướng dẫn giao diện dưới đây dùng định danh minh họa (`tunnel_1234...`), không chứa thông tin đăng nhập thật.
 
 #### Bước 1 · Tạo Runtime API key
 
 [Trang OpenAI API keys](https://platform.openai.com/settings/organization/api-keys) · [Hướng dẫn Secure MCP Tunnels chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-![Bước 1 — Tạo Runtime API key: đặt tên và chỉ cấp quyền cần thiết cho tunnel](docs/assets/guide-01-vi.png)
+![Bước 1 — Tạo runtime API key: đặt tên key, kiểm tra kỹ quyền và chỉ dùng cho tunnel client trên máy](docs/assets/guide-01-vi.png)
 
-1. **Nhập tên API key:** đặt tên dễ nhận biết như `WinOwner MCP Runtime`.
-2. **Kiểm tra quyền:** chọn **Restricted** và chỉ cấp quyền cần thiết cho tunnel—không cấp quyền quản trị dư thừa cho khóa runtime.
-3. **Tạo khóa:** bấm **Create secret key** và lưu trữ an toàn. Tuyệt đối không dán khóa vào khung chat, Git hoặc ảnh chụp màn hình.
+1. **Đặt tên key:** nhập tên dễ nhận biết như `WinOwner MCP Runtime`.
+2. **Kiểm tra quyền (lưu ý bảo mật):** dù ảnh minh họa đánh dấu `All`, **không khuyến nghị cấp toàn quyền API (`All`) làm mặc định** nếu tổ chức hỗ trợ `Restricted` theo phạm vi tunnel—chỉ cấp quyền tối thiểu cần thiết cho tunnel và không dùng khóa quản trị tổ chức cho daemon.
+3. **Tạo key:** bấm **Create secret key** và giữ khóa riêng tư (chỉ dùng cho `tunnel-client` trên máy; tuyệt đối không dán khóa vào khung chat, Git hoặc ảnh chụp màn hình).
 
 #### Bước 2 · Tạo Tunnel riêng
 
 [Trang OpenAI Tunnels](https://platform.openai.com/settings/organization/tunnels) · [Tài liệu tunnel-client chính thức](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md)
 
-![Bước 2 — Tạo Tunnel riêng: chọn tổ chức và workspace được phép](docs/assets/guide-02-vi.png)
+![Bước 2 — Tạo tunnel: đặt tên winowner-mcp, chọn tổ chức/workspace được phép và sao chép Tunnel ID](docs/assets/guide-02-vi.png)
 
-1. **Tên tunnel:** nhập `Winowner-mcp` (hoặc tên định danh phù hợp).
-2. **Mô tả:** điền mô tả ngắn gọn, ví dụ `winowner mcp`.
-3. **Tổ chức:** chọn OpenAI organization bạn có quyền sử dụng.
-4. **Workspace:** chọn ChatGPT workspace tương ứng nếu hiển thị.
-5. **Tạo tunnel:** bấm **Create** và lưu lại `Tunnel ID` (`tunnel_...`).
+1. **Đặt tên tunnel:** nhập tên như `winowner-mcp` và mô tả ngắn như `WinOwner MCP`.
+2. **Chọn tổ chức và workspace:** dùng OpenAI organization được cấp phép và ChatGPT workspace tương ứng (với tài khoản cá nhân/một tổ chức, chọn tổ chức và workspace mặc định).
+3. **Tạo tunnel:** bấm **Create**, sau đó sao chép `Tunnel ID` (`tunnel_...`).
 
 Tiếp theo, chạy `Connect-ChatGPT.cmd` trong `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` và nhập Runtime API key (ô nhập ẩn) cùng `Tunnel ID`. Runtime API key dùng để xác thực `tunnel-client`, còn `Tunnel ID` định danh đường kết nối.
 
@@ -99,25 +97,24 @@ Tiếp theo, chạy `Connect-ChatGPT.cmd` trong `%LOCALAPPDATA%\WinOwnerMCP\v1.2
 
 [Trang plugin ChatGPT](https://chatgpt.com/plugins) · [Hướng dẫn Secure MCP Tunnels chính thức](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) · [Giải thích Authentication None](docs/AUTH_NONE.vi.md)
 
-![Bước 3 — Tạo Plugin: chọn Tunnel, cấu hình xác thực khớp với server và đọc kỹ cảnh báo](docs/assets/guide-03-vi.png)
+![Bước 3 — Tạo plugin trong ChatGPT: mở Add custom MCP server, chọn Tunnel, dán Tunnel ID bước 2 và đọc kỹ cảnh báo](docs/assets/guide-03-vi.png)
 
-1. **Tên plugin:** nhập `Winowner-mcp`.
-2. **Connection:** chọn chế độ **Tunnel**.
-3. **Tunnel ID:** nhập `Tunnel ID` đã tạo ở Bước 2.
-4. **Xác thực:** thiết lập khớp với cấu hình server đã xác minh (`No authentication` chỉ dùng ở giao diện plugin khi WinOwner bảo vệ tầng tunnel riêng và backend; tùy chọn này không bỏ qua kiểm tra HTTP `401` phía máy và không cấp quyền owner).
-5. **Hoàn tất:** đọc cảnh báo rủi ro, đánh dấu xác nhận và bấm **Create as a plugin**. Giữ quyền ban đầu ở mức `read_only`.
+1. **Mở hộp thoại thêm MCP:** vào mục Plugins trên ChatGPT, bấm **Add > Add custom MCP server**.
+2. **Nhập tên plugin:** điền `winowner-mcp` và mô tả ngắn nếu cần (ví dụ `remote desktop`).
+3. **Chọn Tunnel và dán ID:** chuyển **Connection** sang **Tunnel** rồi dán `Tunnel ID` đã tạo ở Bước 2.
+4. **Chọn Authentication và tạo plugin:** chỉ chọn `No authentication` khi WinOwner đã bảo vệ tầng tunnel riêng và backend cục bộ (tùy chọn này không bỏ qua kiểm tra HTTP `401` phía máy và không cấp quyền owner). Đọc cảnh báo rủi ro, đánh dấu xác nhận và bấm **Create as a plugin**. Giữ quyền ban đầu ở mức `read_only`.
 
 #### Bước 4 · Quyền Plugin (tùy chọn)
 
 [Tài liệu quản lý quyền ứng dụng trong ChatGPT](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt)
 
-![Bước 4 — Quyền Plugin (tùy chọn): khuyến nghị chỉ đọc và lưu ý rủi ro](docs/assets/guide-04-vi.png)
+![Bước 4 — Quyền plugin (tùy chọn): chỉnh thông báo xác nhận của ChatGPT và lưu ý rủi ro khi chọn Allow all tools](docs/assets/guide-04-vi.png)
 
 Bước này là **tùy chọn và không bắt buộc để kết nối**.
 
-1. **Quyền phê duyệt:** quy định khi nào ChatGPT hiển thị hộp thoại hỏi ý kiến người dùng trước khi gọi tool.
-2. **Khuyến nghị — chỉ đọc (`Allow read-only tools`):** cho phép đọc và luôn hỏi lại trước khi sửa đổi dữ liệu.
-3. **`Allow all tools`:** bỏ qua lời nhắc xác nhận trên giao diện ChatGPT, mang rủi ro cao và **không cấp quyền owner**. Nên giữ xác nhận với thao tác nhạy cảm.
+1. **Mở phần cài đặt plugin:** vào `Plugin settings > winowner-mcp`.
+2. **Mở Permissions:** chọn chế độ khi nào ChatGPT cần hỏi xác nhận trước khi gọi tool (`Always ask`, `Allow read-only tools`, `Allow low-risk tools`, hoặc `Allow all tools`).
+3. **Ưu tiên giữ xác nhận cho thao tác nhạy cảm:** nên chọn `Allow read-only tools` hoặc `Allow low-risk tools`. Dù ảnh minh họa chỉ cách chọn `Allow all tools` nếu muốn ít bị hỏi hơn, lựa chọn đó mang **rủi ro cao (`Elevated risk`)** và **không cấp quyền owner phía backend**.
 
 **Phê duyệt của ChatGPT và quyền của backend là hai lớp độc lập:** thiết lập trên ChatGPT chỉ kiểm soát việc hỏi xác nhận ở giao diện chat. Backend WinOwner và Windows tự kiểm tra độc lập danh tính, OAuth owner delegation, capability grant và chính sách workspace trên từng request. Chọn `Allow all tools` không thể vượt qua kiểm tra phía backend.
 

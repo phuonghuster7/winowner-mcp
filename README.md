@@ -69,29 +69,27 @@ By default, WinOwner installs into `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` in `read_
 
 ### Connect to ChatGPT
 
-Use an approved OpenAI organization and ChatGPT workspace. The four diagrams below are redacted illustrations (`Private identifiers redacted`), not live OpenAI UI screenshots.
+Use an approved OpenAI organization and ChatGPT workspace. The four illustrated UI guides below use example identifiers (`tunnel_1234...`), not real account credentials.
 
 #### Step 1 · Create a Runtime API key
 
 [OpenAI API keys](https://platform.openai.com/settings/organization/api-keys) · [Official Secure MCP Tunnels guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-![Step 1 — Create Runtime API key: name it and grant only required tunnel permissions](docs/assets/guide-01-en.png)
+![Step 1 — Create runtime API key: name it, review permissions carefully, and use it only for the local tunnel client](docs/assets/guide-01-en.png)
 
-1. **Name the API key:** enter a recognizable name such as `WinOwner MCP Runtime`.
-2. **Review permissions:** select **Restricted** and grant only the permissions required for the tunnel—never grant unnecessary organization admin rights.
-3. **Create the key:** click **Create secret key** and store it safely. Never paste the key in chat messages, Git commits, or screenshots.
+1. **Name the key:** enter a recognizable name such as `WinOwner MCP Runtime`.
+2. **Review permissions (important):** although the UI example highlights `All`, **do not grant full API permissions (`All`) by default** if your organization supports `Restricted` tunnel-scoped permissions—select the minimum permissions required for the tunnel and never use an organization admin key for the runtime daemon.
+3. **Create the key:** click **Create secret key** and keep it private (use it for the local `tunnel-client` only; never paste the key in chat messages, Git commits, or screenshots).
 
 #### Step 2 · Create a Private Tunnel
 
 [OpenAI Tunnels](https://platform.openai.com/settings/organization/tunnels) · [Official tunnel-client end-user guide](https://github.com/openai/tunnel-client/blob/master/docs/end-user-guide.md)
 
-![Step 2 — Create Private Tunnel: select your organization and workspace](docs/assets/guide-02-en.png)
+![Step 2 — Create tunnel: name it winowner-mcp, select your authorized org and workspace, and copy the Tunnel ID](docs/assets/guide-02-en.png)
 
-1. **Tunnel name:** enter `Winowner-mcp` (or another clear identifier).
-2. **Description:** add a short description such as `winowner mcp`.
-3. **Organization:** select the existing OpenAI organization you are authorized to use.
-4. **Workspace:** select the matching ChatGPT workspace if listed.
-5. **Create tunnel:** click **Create** and note the generated `Tunnel ID` (`tunnel_...`).
+1. **Name the tunnel:** enter a name such as `winowner-mcp` and a short description such as `WinOwner MCP`.
+2. **Select organization and workspace:** choose the authorized OpenAI organization and matching ChatGPT workspace (for personal/single-org setups, your default organization and workspace).
+3. **Create the tunnel:** click **Create**, then copy the generated `Tunnel ID` (`tunnel_...`).
 
 Next, run `Connect-ChatGPT.cmd` in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` and enter your Runtime API key (hidden prompt) and `Tunnel ID`. The runtime key authenticates `tunnel-client`; the `Tunnel ID` identifies the tunnel endpoint.
 
@@ -99,25 +97,24 @@ Next, run `Connect-ChatGPT.cmd` in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` and enter
 
 [ChatGPT plugins](https://chatgpt.com/plugins) · [Official Secure MCP Tunnels guide](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) · [About Authentication None (Vietnamese)](docs/AUTH_NONE.vi.md)
 
-![Step 3 — Create Plugin: choose Tunnel, match verified auth settings, and review warnings](docs/assets/guide-03-en.png)
+![Step 3 — Add custom MCP server: choose Tunnel, paste the Step 2 Tunnel ID, set Authentication, and review risks](docs/assets/guide-03-en.png)
 
-1. **Plugin name:** enter `Winowner-mcp`.
-2. **Connection:** switch **Connection** to **Tunnel**.
-3. **Tunnel ID:** enter the `Tunnel ID` from Step 2.
-4. **Authentication:** match your verified server configuration (`No authentication` applies when WinOwner enforces authentication/policy at the private tunnel and backend; it never bypasses backend HTTP `401` checks or grants owner access).
-5. **Finish:** read the trust warning, check **I understand and want to continue**, and click **Create as a plugin**. Keep initial access `read_only`.
+1. **Open the custom connector dialog:** click **Add > Add custom MCP server** on the ChatGPT Plugins page.
+2. **Enter plugin details:** enter `winowner-mcp` and an optional short description (e.g., `remote desktop`).
+3. **Select Tunnel & paste the ID:** switch **Connection** to **Tunnel** and paste your `Tunnel ID` from Step 2.
+4. **Authentication & confirmation:** select `No authentication` only when WinOwner enforces authentication and policy at its private tunnel and local backend (this never bypasses backend HTTP `401` checks or grants owner access). Read the trust warning, check **I understand and want to continue**, and click **Create as a plugin**. Keep initial access `read_only`.
 
 #### Step 4 · Plugin Permissions (optional)
 
 [Managing app permissions in ChatGPT](https://help.openai.com/en/articles/20001495-managing-app-permissions-in-chatgpt)
 
-![Step 4 — Plugin permissions (optional): recommended read-only mode vs elevated risk](docs/assets/guide-04-en.png)
+![Step 4 — Plugin permissions (optional): configure ChatGPT confirmation prompts vs elevated risk of Allow all tools](docs/assets/guide-04-en.png)
 
 This step is **optional and not required to connect**.
 
-1. **Approval settings:** controls when ChatGPT asks for confirmation in the chat UI before calling a tool.
-2. **Recommended — read-only (`Allow read-only tools`):** allows reads while asking before making changes.
-3. **`Allow all tools`:** suppresses ChatGPT UI prompts, carries elevated risk, and **does not grant owner access**. Keep confirmation enabled for sensitive actions.
+1. **Open the plugin settings:** go to `Plugin settings > winowner-mcp`.
+2. **Open Permissions:** choose when ChatGPT asks for approval before calling a tool (`Always ask`, `Allow read-only tools`, `Allow low-risk tools`, or `Allow all tools`).
+3. **Prefer confirmations for sensitive tools:** keep confirmation enabled (`Allow read-only tools` or `Allow low-risk tools`) for state-changing actions. While the diagram shows selecting `Allow all tools` for fewer prompts, that setting carries **elevated risk** and **does not grant backend owner access**.
 
 **ChatGPT approval vs. backend permissions:** ChatGPT approval settings only control UI confirmation prompts. The WinOwner backend and Windows OS independently check identity, OAuth owner delegation, capability grants, and workspace policy on every request. Selecting `Allow all tools` never bypasses backend checks.
 
