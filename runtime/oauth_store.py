@@ -421,14 +421,10 @@ class DurableOAuthStore:
 
             method = (rec.get("code_challenge_method") or "S256").upper()
             challenge = rec.get("code_challenge", "")
-            if method == "S256":
-                if not verify_pkce_s256(code_verifier, challenge):
-                    return False, None, "Invalid PKCE code_verifier (S256 challenge mismatch)"
-            elif method == "PLAIN":
-                if not hmac.compare_digest(code_verifier, challenge):
-                    return False, None, "Invalid PKCE code_verifier (plain challenge mismatch)"
-            else:
-                return False, None, f"Unsupported code_challenge_method: {method}"
+            if method != "S256" or not challenge:
+                return False, None, f"Unsupported code_challenge_method: {method} (S256 is mandatory)"
+            if not verify_pkce_s256(code_verifier, challenge):
+                return False, None, "Invalid PKCE code_verifier (S256 challenge mismatch)"
 
             # Atomically mark as used
             conn.execute("UPDATE oauth_authorization_codes SET used = 1 WHERE code = ?", (code,))

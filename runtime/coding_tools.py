@@ -337,7 +337,10 @@ class CodingToolHandler:
                 except Exception:
                     allowed_paths = []
             if not allowed_paths:
-                return False
+                if self._is_security_control_target(path, write=write):
+                    ctx["security_control_edit"] = True
+                    ctx["authorization_mode"] = "OWNER_AUTHORIZED_SECURITY_EDIT"
+                return True
             resolved_target = path.resolve()
             for ap in allowed_paths:
                 if str(ap).strip() in ("*", "AUTO"):
@@ -451,6 +454,8 @@ class CodingToolHandler:
                     allowed_paths = json.loads(consumed.get("allowed_paths", "[]"))
                 except Exception:
                     allowed_paths = []
+            if not allowed_paths:
+                return True
             resolved_target = target_path.resolve()
             for ap in allowed_paths:
                 if str(ap).strip() in ("*", "AUTO"):
@@ -510,6 +515,93 @@ class CodingToolHandler:
             return True
         return False
 
+    def _has_active_direct_grant_for_workspace_list(self) -> bool:
+        """Allow read-only agent_workspace_list when an owner holds an active direct capability grant (no scoped durable delegation)."""
+        ctx = self._req_ctx()
+        principal = ctx.get("auth_principal")
+        persistence = ctx.get("oauth_persistence")
+        signing_key = str(ctx.get("oauth_signing_key") or "").strip()
+        if principal is None or persistence is None or len(signing_key) < 16:
+            return False
+        if getattr(principal, "auth_method", "") != "oauth" or not getattr(principal, "is_owner", False):
+            return False
+        meta = getattr(principal, "metadata", {}) or {}
+        payload_tok = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
+        client_id = str(getattr(principal, "client_id", "") or payload_tok.get("client_id") or "").strip()
+        jti = str(getattr(principal, "jti", "") or payload_tok.get("jti") or meta.get("jti") or "").strip()
+        if not client_id or not jti or not hasattr(persistence, "_db"):
+            return False
+        now = time.time()
+        try:
+            with persistence._db() as conn:
+                del_cnt = conn.execute(
+                    "SELECT COUNT(*) AS c FROM owner_durable_delegations WHERE owner_id = 'local_owner' AND client_id = ?",
+                    (client_id,),
+                ).fetchone()["c"]
+                if del_cnt > 0:
+                    return False
+                row = conn.execute(
+                    """
+                    SELECT * FROM owner_capability_grants
+                    WHERE owner_id = 'local_owner' AND client_id = ? AND oauth_token_jti = ?
+                      AND revoked = 0 AND expires_at > ? AND used_count < max_uses
+                    ORDER BY issued_at DESC LIMIT 1
+                    """,
+                    (client_id, jti, now),
+                ).fetchone()
+                return row is not None
+        except Exception:
+            return False
+
+    def _is_cloud_owner_grant_revoked_or_missing(self, *, require_active_for_owner: bool = False) -> bool:
+        """Return True if a cloud OAuth caller's owner delegations/grants have all expired/revoked (P0-3)."""
+        ctx = self._req_ctx()
+        principal = ctx.get("auth_principal")
+        persistence = ctx.get("oauth_persistence")
+        signing_key = str(ctx.get("oauth_signing_key") or "").strip()
+        if principal is None or persistence is None or len(signing_key) < 16:
+            return False
+        if getattr(principal, "auth_method", "") != "oauth":
+            return False
+        meta = getattr(principal, "metadata", {}) or {}
+        payload_tok = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
+        client_id = str(getattr(principal, "client_id", "") or payload_tok.get("client_id") or "").strip()
+        jti = str(getattr(principal, "jti", "") or payload_tok.get("jti") or meta.get("jti") or "").strip()
+        if not client_id or not hasattr(persistence, "_db"):
+            return False
+        now = time.time()
+        try:
+            with persistence._db() as conn:
+                total_del = conn.execute(
+                    "SELECT COUNT(*) AS c FROM owner_durable_delegations WHERE owner_id = 'local_owner' AND client_id = ?",
+                    (client_id,),
+                ).fetchone()["c"]
+                total_gr = conn.execute(
+                    "SELECT COUNT(*) AS c FROM owner_capability_grants WHERE owner_id = 'local_owner' AND client_id = ?",
+                    (client_id,),
+                ).fetchone()["c"]
+                if total_del == 0 and total_gr == 0:
+                    return bool(require_active_for_owner and getattr(principal, "is_owner", False))
+                active_del = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c FROM owner_durable_delegations
+                    WHERE owner_id = 'local_owner' AND client_id = ?
+                      AND revoked = 0 AND expires_at > ? AND total_used_count < total_operation_budget
+                    """,
+                    (client_id, now),
+                ).fetchone()["c"]
+                active_gr = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c FROM owner_capability_grants
+                    WHERE owner_id = 'local_owner' AND client_id = ? AND oauth_token_jti = ?
+                      AND revoked = 0 AND expires_at > ? AND used_count < max_uses
+                    """,
+                    (client_id, jti, now),
+                ).fetchone()["c"]
+                return (active_del == 0 and active_gr == 0)
+        except Exception:
+            return False
+
     def _sensitive(self, path: Path, *, write=False, root: Path | None = None) -> bool:
         if self._is_raw_secret_or_protected_state(path):
             return True
@@ -547,14 +639,27 @@ class CodingToolHandler:
             policy = getattr(self.broker, "policy", None)
             allowed_roots = getattr(policy, "allowed_roots", None)
             principal = self._req_ctx().get("auth_principal")
-            is_unrestricted = bool(policy and getattr(policy, "unrestricted_workspace_access", False))
+            is_unrestricted = bool(
+                policy
+                and getattr(policy, "unrestricted_workspace_access", False)
+                and getattr(policy, "profile", "") != "read_only"
+            )
             if principal is not None and not getattr(principal, "is_owner", False):
                 is_unrestricted = False
             tool_name = str(self._req_ctx().get("tool_name") or "")
             has_owner_global = (
                 tool_name == "agent_workspace_list"
-                and self._has_owner_global_filesystem_authority(None)
+                and (
+                    self._has_owner_global_filesystem_authority(None)
+                    or (is_unrestricted and self._has_active_direct_grant_for_workspace_list())
+                )
             )
+            if principal is not None and self._req_ctx().get("oauth_persistence") is not None:
+                if self._is_cloud_owner_grant_revoked_or_missing(require_active_for_owner=True):
+                    is_unrestricted = False
+                    has_owner_global = False
+                elif not has_owner_global and not allowed_roots:
+                    is_unrestricted = False
             if has_owner_global or (is_unrestricted and not allowed_roots):
                 drives: list[str] = []
                 try:
@@ -626,9 +731,40 @@ class CodingToolHandler:
         policy = getattr(self.broker, "policy", None)
         allowed_roots = getattr(policy, "allowed_roots", None)
         principal = self._req_ctx().get("auth_principal")
-        is_unrestricted = bool(policy and getattr(policy, "unrestricted_workspace_access", False))
+        persistence = self._req_ctx().get("oauth_persistence")
+        if principal is not None and persistence is not None:
+            if self._is_cloud_owner_grant_revoked_or_missing(require_active_for_owner=(name in _WRITE)):
+                raise PermissionError("Permission Denied (P0-3): Owner delegation or capability grant is missing, expired, or revoked")
+            if getattr(principal, "is_owner", False) and name in _WRITE:
+                raw_args = self._req_ctx().get("raw_args") or {}
+                rel_target = (
+                    raw_args.get("path")
+                    or raw_args.get("destination_path")
+                    or raw_args.get("source_path")
+                    or raw_args.get("cwd")
+                )
+                target_for_grant = root
+                if isinstance(rel_target, str) and rel_target.strip():
+                    try:
+                        cand_t = Path(rel_target.strip())
+                        target_for_grant = (cand_t if cand_t.is_absolute() else (root / cand_t)).resolve(strict=False)
+                    except Exception:
+                        target_for_grant = root
+                if not self._authorize_owner_security_control_access(target_for_grant, write=True):
+                    raise PermissionError("Permission Denied (P0-3): Active owner capability grant or delegation covering tool and workspace is required")
+        is_unrestricted = bool(
+            policy
+            and getattr(policy, "unrestricted_workspace_access", False)
+            and getattr(policy, "profile", "") != "read_only"
+        )
         if principal is not None and not getattr(principal, "is_owner", False):
             is_unrestricted = False
+        if principal is not None and persistence is not None and is_unrestricted:
+            if not (
+                self._has_owner_global_filesystem_authority(root)
+                or (name == "agent_workspace_list" and not allowed_roots and self._has_active_direct_grant_for_workspace_list())
+            ):
+                is_unrestricted = False
         if is_unrestricted:
             if allowed_roots:
                 in_allowed = any(root == Path(ar).resolve() or root.is_relative_to(Path(ar).resolve()) for ar in allowed_roots)
@@ -714,6 +850,7 @@ class CodingToolHandler:
             "oauth_persistence": oauth_persistence,
             "oauth_signing_key": str(oauth_signing_key or ""),
             "capability_grant_id": args.get("capability_grant_id") if isinstance(args, dict) else None,
+            "raw_args": args if isinstance(args, dict) else {},
             "consumed_grant": None,
             "security_control_edit": False,
             "owner_global_filesystem": False,
@@ -729,6 +866,9 @@ class CodingToolHandler:
             _validate(args, ALL_CODING_TOOL_DEFINITIONS[name][1])
             if not isinstance(caller_id, str) or not caller_id.strip() or caller_id.casefold() in ("anonymous", "unknown", "unauthenticated", "cloud", "remote"):
                 raise PermissionError("Authenticated caller identity is required")
+            policy_obj = getattr(self.broker, "policy", None)
+            if policy_obj is not None and getattr(policy_obj, "profile", "") == "read_only" and name in _WRITE:
+                raise PermissionError("Caller capability tier does not permit this operation under read_only profile")
             if caller_tier not in ("READ", "WRITE", "EXECUTE", "SYSTEM_ADMIN") or (name in _WRITE and caller_tier not in ("WRITE", "EXECUTE", "SYSTEM_ADMIN")):
                 raise PermissionError("Caller capability tier does not permit this operation")
             if self._stopped():
@@ -1388,11 +1528,14 @@ class CodingToolHandler:
             and getattr(principal, "auth_method", "") == "oauth"
             and getattr(principal, "is_owner", False) is True
             and "mcp:owner" in (getattr(principal, "scopes", frozenset()) or frozenset())
+            and not self._is_cloud_owner_grant_revoked_or_missing(require_active_for_owner=True)
+            and self._has_owner_global_filesystem_authority(Path(cwd) if cwd else Path(root))
         )
         is_unrestricted = bool(
             (
                 policy
                 and getattr(policy, "unrestricted_workspace_access", False)
+                and getattr(policy, "profile", "") != "read_only"
                 and ((surface == "local" and principal is None) or is_owner_oauth)
             )
             or (is_owner_oauth and entry.get("owner_global_filesystem"))

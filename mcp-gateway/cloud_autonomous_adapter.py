@@ -345,6 +345,38 @@ def create_cloud_autonomous_adapter_app(
                 "agent_task_cancel",
                 "agent_emergency_stop",
             ])
+        is_estop = bool(gw.is_emergency_stop_active()) if hasattr(gw, "is_emergency_stop_active") else False
+        persistence = getattr(app.state, "oauth_persistence", None)
+        signing_key = str(getattr(app.state, "oauth_signing_key", "") or "")
+        active_delegations = []
+        active_grants_cnt = 0
+        cg_state: dict[str, Any] = {}
+        if persistence is not None:
+            if hasattr(persistence, "list_active_owner_delegations") and signing_key:
+                try:
+                    active_delegations = persistence.list_active_owner_delegations(secret=signing_key)
+                except Exception:
+                    active_delegations = []
+            if hasattr(persistence, "count_active_owner_grants"):
+                try:
+                    active_grants_cnt = int(persistence.count_active_owner_grants())
+                except Exception:
+                    active_grants_cnt = 0
+            if hasattr(persistence, "get_chatgpt_connection_state"):
+                try:
+                    cg_state = persistence.get_chatgpt_connection_state()
+                except Exception:
+                    cg_state = {}
+        profile_str = str(getattr(gw.policy, "profile", "read_only"))
+        has_owner_auth = bool(len(active_delegations) > 0 or active_grants_cnt > 0)
+        if is_estop or profile_str == "read_only":
+            eff_level = "READ"
+        elif is_owner_full_control and has_owner_auth:
+            eff_level = "OWNER"
+        elif has_owner_auth or profile_str in ("developer_p2", "desktop_p3", "full_agent"):
+            eff_level = "SCOPED"
+        else:
+            eff_level = "READ"
         return {
             "status": "ok",
             "service": "cloud-autonomous-loopback-adapter",
@@ -357,8 +389,14 @@ def create_cloud_autonomous_adapter_app(
             "host": "127.0.0.1",
             "port": 8768,
             "surface": "cloud_autonomous",
-            "profile": str(getattr(gw.policy, "profile", "read_only")),
+            "profile": profile_str,
+            "emergency_stop": is_estop,
             "owner_full_control_requires_oauth": True,
+            "owner_identity_verified": has_owner_auth,
+            "active_owner_delegations_count": len(active_delegations),
+            "active_owner_grants_count": active_grants_cnt,
+            "effective_permission_level": eff_level,
+            "chatgpt_read_tool_verified": bool(cg_state.get("verified_read_tool_call", False)),
             "strict_autonomous_tools_only": not coding_enabled,
             "exposed_tools": exposed,
             "require_autonomous_auth": app.state.require_autonomous_auth,
@@ -455,6 +493,8 @@ def create_cloud_autonomous_adapter_app(
                 app.state.mcp_session_last_seen.pop(session_id, None)
 
     def coding_caller_tier(request: Request) -> str:
+        if getattr(gw.policy, "profile", "read_only") == "read_only":
+            return "READ"
         principal = getattr(request.state, "auth_principal", None)
         if principal is not None:
             return principal.tier
@@ -468,8 +508,9 @@ def create_cloud_autonomous_adapter_app(
             if "mcp:owner" in scopes or "mcp:all" in scopes:
                 return "SYSTEM_ADMIN"
             return "WRITE" if "mcp:coding:write" in scopes else "READ"
-        # Reached only after successful verification against owner-configured
-        # shared Bearer token. No session/header identity can reach this path.
+        # Shared static bearer is connector transport auth only (READ unless explicitly non-owner profile).
+        if getattr(gw.policy, "profile", "read_only") in {"read_only", "owner_full_control"}:
+            return "READ"
         return "WRITE"
 
     @app.get("/mcp")

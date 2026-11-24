@@ -18,6 +18,8 @@ try{
 $now=[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 if($expires -le $now){throw 'Owner OAuth token expired. Revoke/renew it through the owner access manager.'}
 if(-not $token.StartsWith('mcp_oat_')){throw 'Owner token bundle has invalid format'}
+$pairingSummary="WinOwner Verified Owner Delegation | client_id=$($data.client_id) | delegation_id=$($data.delegation_id) | grant_id=$($data.capability_grant_id) | expires_utc=$([DateTimeOffset]::FromUnixTimeSeconds($expires).UtcDateTime.ToString('u'))"
+$token=''
 # Refuse to copy if the installed authorization cannot be checked.
 $python=Join-Path $root '.venv\Scripts\python.exe'
 $cli=Join-Path $PSScriptRoot 'manage_owner_delegation.py'
@@ -29,16 +31,16 @@ if(-not(Test-Path -LiteralPath $python -PathType Leaf) -or
 }
 & $python $cli --oauth-db $db --tasks-db $db check-installed-owner --bundle-file $file
 if($LASTEXITCODE -ne 0){throw 'Owner bundle revoked, expired or unverified. Credential copy blocked.'}
-Write-Host ('Owner token expires (UTC): '+[DateTimeOffset]::FromUnixTimeSeconds($expires).UtcDateTime.ToString('u'))
-$msg="Copy a highly privileged owner OAuth token to the Windows clipboard? Only paste it into a trusted WinOwner owner-authorization field. Do not paste it into the Platform API key screen or share it in chat. Clipboard contents may be read by other programs."
-$result=[System.Windows.Forms.MessageBox]::Show($msg,'WinOwner - Copy Owner Credential',[System.Windows.Forms.MessageBoxButtons]::YesNo,[System.Windows.Forms.MessageBoxIcon]::Warning,[System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+Write-Host ('Owner delegation expires (UTC): '+[DateTimeOffset]::FromUnixTimeSeconds($expires).UtcDateTime.ToString('u'))
+$msg="Copy non-secret Owner Pairing Verification Summary to the Windows clipboard? Raw owner tokens are never pasted into ChatGPT."
+$result=[System.Windows.Forms.MessageBox]::Show($msg,'WinOwner - Copy Owner Pairing Summary',[System.Windows.Forms.MessageBoxButtons]::YesNo,[System.Windows.Forms.MessageBoxIcon]::Warning,[System.Windows.Forms.MessageBoxDefaultButton]::Button2)
 if($result -ne [System.Windows.Forms.DialogResult]::Yes){Write-Host 'Copy cancelled';exit 2}
 try{
-    [System.Windows.Forms.Clipboard]::SetText($token)
+    [System.Windows.Forms.Clipboard]::SetText($pairingSummary)
 }catch{
     throw 'Clipboard copy failed. No credential is printed; retry only if necessary.'
 }finally{
-    $token=''
+    $pairingSummary=''
     $data=$null
 }
-Write-Host 'OWNER_TOKEN_COPIED. Clear clipboard history and replace the clipboard after use. Never paste in chat.'
+Write-Host 'OWNER_PAIRING_SUMMARY_COPIED. Raw owner tokens are never copied or pasted into ChatGPT.'

@@ -815,8 +815,10 @@ class SecurityPolicy:
         state_root = os.getenv("MCP_STATE_ROOT")
         default_rt = Path(state_root) if state_root else (PROJECT_ROOT / "runtime")
         desk_cfg = self.config.get("desktop_policy", {})
+        env_estop = os.getenv("MCP_EMERGENCY_STOP_FILE") or os.getenv("WINDOWS_MCP_EMERGENCY_STOP_FILE")
         raw_estop = (
             emergency_stop_file
+            or env_estop
             or (None if state_root else desk_cfg.get("emergency_stop_file"))
             or (default_rt / "EMERGENCY_STOP")
         )

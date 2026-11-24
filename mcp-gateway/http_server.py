@@ -281,10 +281,22 @@ def resolve_oauth_signing_key_path(
     if env_path:
         return Path(env_path)
     if db_path is not None and str(db_path) != ":memory:":
-        return Path(db_path).resolve().parent / "secrets" / "oauth_signing.key"
+        db_dir = Path(db_path).resolve().parent
+        if db_dir.name.lower() == "secrets":
+            canonical = db_dir / "oauth_signing.key"
+            legacy = db_dir / "secrets" / "oauth_signing.key"
+            if legacy.is_file() and not canonical.is_file():
+                return legacy
+            return canonical
+        return db_dir / "secrets" / "oauth_signing.key"
     state_root = os.getenv("MCP_STATE_ROOT", "").strip()
     if state_root:
-        return Path(state_root) / "runtime" / "secrets" / "oauth_signing.key"
+        sr = Path(state_root)
+        if sr.name.lower() == "secrets":
+            return sr / "oauth_signing.key"
+        if sr.name.lower() == "runtime":
+            return sr / "secrets" / "oauth_signing.key"
+        return sr / "runtime" / "secrets" / "oauth_signing.key"
     return DEFAULT_OAUTH_SIGNING_KEY_PATH
 
 
@@ -352,10 +364,22 @@ def resolve_owner_admin_token_path(
     if env_path:
         return Path(env_path)
     if db_path is not None and str(db_path) != ":memory:":
-        return Path(db_path).resolve().parent / "secrets" / "owner_admin.key"
+        db_dir = Path(db_path).resolve().parent
+        if db_dir.name.lower() == "secrets":
+            canonical = db_dir / "owner_admin.key"
+            legacy = db_dir / "secrets" / "owner_admin.key"
+            if legacy.is_file() and not canonical.is_file():
+                return legacy
+            return canonical
+        return db_dir / "secrets" / "owner_admin.key"
     state_root = os.getenv("MCP_STATE_ROOT", "").strip()
     if state_root:
-        return Path(state_root) / "runtime" / "secrets" / "owner_admin.key"
+        sr = Path(state_root)
+        if sr.name.lower() == "secrets":
+            return sr / "owner_admin.key"
+        if sr.name.lower() == "runtime":
+            return sr / "secrets" / "owner_admin.key"
+        return sr / "runtime" / "secrets" / "owner_admin.key"
     return DEFAULT_OWNER_ADMIN_TOKEN_PATH
 
 
@@ -611,6 +635,67 @@ class _SQLiteOAuthPersistence:
                     expires_at REAL NOT NULL,
                     revoked INTEGER NOT NULL DEFAULT 0
                 )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS owner_pairing_challenges (
+                    challenge_id TEXT PRIMARY KEY,
+                    nonce_hash TEXT NOT NULL UNIQUE,
+                    verification_code TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    client_id TEXT NOT NULL,
+                    client_name TEXT NOT NULL,
+                    auth_method TEXT NOT NULL,
+                    verifiable_identity INTEGER NOT NULL,
+                    oauth_token_jti TEXT NOT NULL,
+                    requested_permission_level TEXT NOT NULL,
+                    requested_tiers TEXT NOT NULL,
+                    requested_workspaces TEXT NOT NULL,
+                    requested_capabilities TEXT NOT NULL,
+                    requested_ttl_seconds REAL NOT NULL,
+                    allow_destructive INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    refusal_reason TEXT DEFAULT '',
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL,
+                    decided_at REAL,
+                    resulting_delegation_id TEXT DEFAULT '',
+                    resulting_grant_id TEXT DEFAULT '',
+                    signature TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS owner_pairing_used_nonces (
+                    nonce_hash TEXT PRIMARY KEY,
+                    challenge_id TEXT NOT NULL,
+                    client_id TEXT NOT NULL,
+                    consumed_at REAL NOT NULL,
+                    outcome TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chatgpt_connection_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    verified_read_tool_call INTEGER NOT NULL DEFAULT 0,
+                    last_verified_tool TEXT DEFAULT '',
+                    last_verified_at REAL,
+                    last_auth_mode TEXT DEFAULT 'none',
+                    last_client_id TEXT DEFAULT '',
+                    supports_verifiable_owner_identity INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO chatgpt_connection_state (
+                    id, verified_read_tool_call, last_verified_tool, last_verified_at,
+                    last_auth_mode, last_client_id, supports_verifiable_owner_identity
+                ) VALUES (1, 0, '', NULL, 'none', '', 0)
                 """
             )
 
@@ -1180,6 +1265,7 @@ class _SQLiteOAuthPersistence:
                     return str(ad["grant_id"])
 
             # Look up active Layer-1 Durable Owner Delegation for (owner_id, client_id)
+            # P0-2 Fix: Never auto-resurrect or extend an expired durable delegation.
             del_row = conn.execute(
                 """
                 SELECT * FROM owner_durable_delegations
@@ -1189,56 +1275,6 @@ class _SQLiteOAuthPersistence:
                 """,
                 (owner_id, client_id, now),
             ).fetchone()
-            if not del_row:
-                # If an unrevoked delegation exists with budget that simply lapsed session TTL,
-                # auto-renew its session TTL for this verified owner caller
-                lapsed_del = conn.execute(
-                    """
-                    SELECT * FROM owner_durable_delegations
-                    WHERE owner_id = ? AND client_id = ?
-                      AND revoked = 0 AND total_used_count < total_operation_budget
-                    ORDER BY issued_at DESC LIMIT 1
-                    """,
-                    (owner_id, client_id),
-                ).fetchone()
-                if lapsed_del:
-                    ld_rec = dict(lapsed_del)
-                    expected_lapsed_sig = self._sign_owner_durable_delegation(
-                        secret,
-                        str(ld_rec["delegation_id"]),
-                        str(ld_rec["owner_id"]),
-                        str(ld_rec["client_id"]),
-                        str(ld_rec["allowed_tools"]),
-                        str(ld_rec["allowed_paths"]),
-                        float(ld_rec["issued_at"]),
-                        float(ld_rec["expires_at"]),
-                        int(ld_rec["total_operation_budget"]),
-                        int(ld_rec["allow_destructive_operations"]),
-                        str(ld_rec["audit_identity"]),
-                    )
-                    if hmac.compare_digest(str(ld_rec["signature"]), expected_lapsed_sig):
-                        ext_ttl = 28800.0
-                        new_del_exp = now + ext_ttl
-                        new_del_sig = self._sign_owner_durable_delegation(
-                            secret,
-                            str(ld_rec["delegation_id"]),
-                            str(ld_rec["owner_id"]),
-                            str(ld_rec["client_id"]),
-                            str(ld_rec["allowed_tools"]),
-                            str(ld_rec["allowed_paths"]),
-                            float(ld_rec["issued_at"]),
-                            new_del_exp,
-                            int(ld_rec["total_operation_budget"]),
-                            int(ld_rec["allow_destructive_operations"]),
-                            str(ld_rec["audit_identity"]),
-                        )
-                        conn.execute(
-                            "UPDATE owner_durable_delegations SET expires_at = ?, signature = ? WHERE delegation_id = ?",
-                            (new_del_exp, new_del_sig, str(ld_rec["delegation_id"])),
-                        )
-                        ld_rec["expires_at"] = new_del_exp
-                        ld_rec["signature"] = new_del_sig
-                        del_row = ld_rec
             if not del_row:
                 return req_gid or None
 
@@ -1646,6 +1682,818 @@ class _SQLiteOAuthPersistence:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    # ------------------------------------------------------------------
+    # Verifiable Owner Pairing & Unified Authorization Truth (Phase 2 P0)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _sign_owner_pairing_challenge(
+        secret: str,
+        challenge_id: str,
+        nonce_hash: str,
+        verification_code: str,
+        owner_id: str,
+        client_id: str,
+        auth_method: str,
+        verifiable_identity: int,
+        oauth_token_jti: str,
+        requested_permission_level: str,
+        requested_tiers_json: str,
+        requested_workspaces_json: str,
+        requested_capabilities_json: str,
+        requested_ttl_seconds: float,
+        allow_destructive: int,
+        created_at: float,
+        expires_at: float,
+    ) -> str:
+        payload = (
+            f"opc|{challenge_id}|{nonce_hash}|{verification_code}|{owner_id}|{client_id}|"
+            f"{auth_method}|{int(verifiable_identity)}|{oauth_token_jti}|{requested_permission_level}|"
+            f"{requested_tiers_json}|{requested_workspaces_json}|{requested_capabilities_json}|"
+            f"{float(requested_ttl_seconds):.6f}|{int(allow_destructive)}|{float(created_at):.6f}|{float(expires_at):.6f}"
+        )
+        return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def _derive_verification_code(secret: str, challenge_id: str, nonce_hash: str, client_id: str) -> str:
+        alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+        digest = hmac.new(
+            secret.encode("utf-8"),
+            f"vcode|{challenge_id}|{nonce_hash}|{client_id}".encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+        chars = [alphabet[b % len(alphabet)] for b in digest[:8]]
+        return f"{''.join(chars[:4])}-{''.join(chars[4:8])}"
+
+    def record_verified_read_tool_call(
+        self,
+        *,
+        client_id: str,
+        auth_method: str,
+        tool_name: str,
+    ) -> None:
+        now = time.time()
+        clean_cid = str(client_id or "cloud_client_default").strip()
+        clean_am = str(auth_method or "static_bearer").strip()
+        auth_mode = "oauth_2_1" if clean_am == "oauth" else "shared_tunnel_bearer"
+        verifiable = 1 if (clean_am == "oauth" and clean_cid not in ("", "cloud_client_default", "chatgpt_cloud_client", "anonymous")) else 0
+        with self._db() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO chatgpt_connection_state (
+                    id, verified_read_tool_call, last_verified_tool, last_verified_at,
+                    last_auth_mode, last_client_id, supports_verifiable_owner_identity
+                ) VALUES (1, 1, ?, ?, ?, ?, ?)
+                """,
+                (str(tool_name or ""), now, auth_mode, clean_cid, verifiable),
+            )
+
+    def get_chatgpt_connection_state(self) -> dict[str, Any]:
+        with self._db() as conn:
+            row = conn.execute(
+                """
+                SELECT verified_read_tool_call, last_verified_tool, last_verified_at,
+                       last_auth_mode, last_client_id, supports_verifiable_owner_identity
+                FROM chatgpt_connection_state WHERE id = 1
+                """
+            ).fetchone()
+            if not row:
+                return {
+                    "verified_read_tool_call": False,
+                    "last_verified_tool": None,
+                    "last_verified_at": None,
+                    "last_auth_mode": "none",
+                    "last_client_id_masked": "",
+                    "supports_verifiable_owner_identity": False,
+                }
+            cid = str(row["last_client_id"] or "")
+            masked = f"{cid[:12]}..." if len(cid) > 15 else cid
+            ts = row["last_verified_at"]
+            iso_ts = (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(ts)))
+                if ts is not None
+                else None
+            )
+            return {
+                "verified_read_tool_call": bool(row["verified_read_tool_call"]),
+                "last_verified_tool": row["last_verified_tool"] or None,
+                "last_verified_at": iso_ts,
+                "last_auth_mode": row["last_auth_mode"] or "none",
+                "last_client_id": cid,
+                "last_client_id_masked": masked,
+                "supports_verifiable_owner_identity": bool(row["supports_verifiable_owner_identity"]),
+            }
+
+    def create_owner_pairing_challenge(
+        self,
+        *,
+        secret: str,
+        client_id: str,
+        client_name: str = "",
+        auth_method: str = "",
+        oauth_token_jti: str = "",
+        owner_id: str = "local_owner",
+        requested_permission_level: str = "OWNER",
+        requested_tiers: list[str] | None = None,
+        requested_workspaces: list[str] | None = None,
+        requested_capabilities: list[str] | None = None,
+        requested_ttl_seconds: float = 28800.0,
+        allow_destructive: bool = False,
+        challenge_ttl_seconds: float = 300.0,
+    ) -> dict[str, Any]:
+        if not secret or len(str(secret).strip()) < 16 or str(secret).strip() == "default_secret":
+            raise ValueError("Invalid OAuth signing key for pairing challenge")
+        clean_cid = str(client_id or "").strip()
+        clean_am = str(auth_method or "").strip()
+        clean_jti = str(oauth_token_jti or "").strip()
+        unverifiable_ids = {"", "cloud_client_default", "chatgpt_cloud_client", "anonymous", "unknown", "local"}
+        if clean_am != "oauth" or clean_cid.lower() in unverifiable_ids or not clean_jti:
+            raise PermissionError(
+                "UNVERIFIABLE_CLIENT_IDENTITY: Client session lacks verifiable OAuth 2.1 identity and cannot request owner privileges"
+            )
+        level = str(requested_permission_level or "OWNER").strip().upper()
+        if level not in ("READ", "SCOPED", "OWNER"):
+            level = "OWNER"
+        if requested_tiers is None:
+            if level == "OWNER":
+                tiers_list = ["READ", "WRITE", "EXECUTE", "DESKTOP", "SYSTEM_ADMIN"]
+            elif level == "SCOPED":
+                tiers_list = ["READ", "WRITE", "EXECUTE"]
+            else:
+                tiers_list = ["READ"]
+        else:
+            tiers_list = [str(t).strip().upper() for t in requested_tiers if str(t).strip()]
+        if requested_capabilities is None:
+            if level == "OWNER":
+                caps_list = [
+                    "FILE_READ",
+                    "FILE_WRITE",
+                    "SECURITY_CONTROL_EDIT",
+                    "GIT",
+                    "SHELL",
+                    "TEST",
+                    "BUILD",
+                    "DESKTOP",
+                    "TASK_CONTROL",
+                    "OWNER_GLOBAL_FILESYSTEM",
+                ]
+            elif level == "SCOPED":
+                caps_list = ["FILE_READ", "FILE_WRITE", "GIT", "SHELL", "TEST", "BUILD", "DESKTOP", "TASK_CONTROL"]
+            else:
+                caps_list = ["FILE_READ"]
+        else:
+            caps_list = [str(c).strip().upper() for c in requested_capabilities if str(c).strip()]
+        if requested_workspaces:
+            ws_list = _normalize_owner_allowed_paths([str(w) for w in requested_workspaces])
+        elif level == "OWNER":
+            ws_list = discover_windows_filesystem_roots()
+        else:
+            ws_list = [str(PROJECT_ROOT.resolve())]
+
+        req_ttl = min(max(60.0, float(requested_ttl_seconds or 28800.0)), 86400.0)
+        ch_ttl = min(max(1.0, float(challenge_ttl_seconds or 300.0)), 600.0)
+        now = time.time()
+        expires_at = now + ch_ttl
+        challenge_id = f"pair_{secrets.token_hex(16)}"
+        raw_nonce = secrets.token_urlsafe(32)
+        nonce_hash = hashlib.sha256(raw_nonce.encode("utf-8")).hexdigest()
+        vcode = self._derive_verification_code(secret, challenge_id, nonce_hash, clean_cid)
+        tiers_json = json.dumps(tiers_list, separators=(",", ":"))
+        ws_json = json.dumps(ws_list, separators=(",", ":"))
+        caps_json = json.dumps(caps_list, separators=(",", ":"))
+        allow_dest_int = 1 if allow_destructive else 0
+        sig = self._sign_owner_pairing_challenge(
+            secret,
+            challenge_id,
+            nonce_hash,
+            vcode,
+            owner_id,
+            clean_cid,
+            clean_am,
+            1,
+            clean_jti,
+            level,
+            tiers_json,
+            ws_json,
+            caps_json,
+            req_ttl,
+            allow_dest_int,
+            now,
+            expires_at,
+        )
+        c_name = str(client_name or "").strip()
+        if not c_name:
+            reg = self.get_client(clean_cid)
+            c_name = (reg.get("client_name") if reg else "") or clean_cid
+
+        with self._db() as conn:
+            conn.execute(
+                """
+                INSERT INTO owner_pairing_challenges (
+                    challenge_id, nonce_hash, verification_code, owner_id, client_id,
+                    client_name, auth_method, verifiable_identity, oauth_token_jti,
+                    requested_permission_level, requested_tiers, requested_workspaces,
+                    requested_capabilities, requested_ttl_seconds, allow_destructive,
+                    status, refusal_reason, created_at, expires_at, decided_at,
+                    resulting_delegation_id, resulting_grant_id, signature
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 'PENDING', '', ?, ?, NULL, '', '', ?)
+                """,
+                (
+                    challenge_id,
+                    nonce_hash,
+                    vcode,
+                    owner_id,
+                    clean_cid,
+                    c_name,
+                    clean_am,
+                    clean_jti,
+                    level,
+                    tiers_json,
+                    ws_json,
+                    caps_json,
+                    req_ttl,
+                    allow_dest_int,
+                    now,
+                    expires_at,
+                    sig,
+                ),
+            )
+        return {
+            "challenge_id": challenge_id,
+            "verification_code": vcode,
+            "status": "PENDING",
+            "owner_id": owner_id,
+            "client_id": clean_cid,
+            "client_name": c_name,
+            "auth_method": clean_am,
+            "verifiable_identity": True,
+            "requested_permission_level": level,
+            "requested_tiers": tiers_list,
+            "requested_workspaces": ws_list,
+            "requested_capabilities": caps_list,
+            "requested_ttl_seconds": req_ttl,
+            "allow_destructive": bool(allow_destructive),
+            "created_at": now,
+            "expires_at": expires_at,
+            "remaining_seconds": max(0, int(expires_at - now)),
+        }
+
+    def _format_public_challenge(self, row_dict: dict[str, Any], now: float | None = None) -> dict[str, Any]:
+        cur_now = now if now is not None else time.time()
+        st = str(row_dict.get("status") or "PENDING")
+        exp = float(row_dict.get("expires_at") or 0.0)
+        if st == "PENDING" and exp <= cur_now:
+            st = "EXPIRED"
+        try:
+            tiers = json.loads(row_dict.get("requested_tiers") or "[]")
+        except Exception:
+            tiers = []
+        try:
+            workspaces = json.loads(row_dict.get("requested_workspaces") or "[]")
+        except Exception:
+            workspaces = []
+        try:
+            caps = json.loads(row_dict.get("requested_capabilities") or "[]")
+        except Exception:
+            caps = []
+        return {
+            "challenge_id": row_dict["challenge_id"],
+            "verification_code": row_dict["verification_code"],
+            "status": st,
+            "owner_id": row_dict["owner_id"],
+            "client_id": row_dict["client_id"],
+            "client_name": row_dict.get("client_name") or row_dict["client_id"],
+            "auth_method": row_dict["auth_method"],
+            "verifiable_identity": bool(row_dict.get("verifiable_identity")),
+            "requested_permission_level": row_dict["requested_permission_level"],
+            "requested_tiers": tiers,
+            "requested_workspaces": workspaces,
+            "requested_capabilities": caps,
+            "requested_ttl_seconds": float(row_dict.get("requested_ttl_seconds") or 28800.0),
+            "allow_destructive": bool(row_dict.get("allow_destructive")),
+            "refusal_reason": row_dict.get("refusal_reason") or "",
+            "created_at": float(row_dict["created_at"]),
+            "expires_at": exp,
+            "decided_at": row_dict.get("decided_at"),
+            "remaining_seconds": max(0, int(exp - cur_now)) if st == "PENDING" else 0,
+            "resulting_delegation_id": row_dict.get("resulting_delegation_id") or "",
+            "resulting_grant_id": row_dict.get("resulting_grant_id") or "",
+        }
+
+    def list_owner_pairing_challenges(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        now = time.time()
+        with self._db() as conn:
+            conn.execute(
+                "UPDATE owner_pairing_challenges SET status = 'EXPIRED' WHERE status = 'PENDING' AND expires_at <= ?",
+                (now,),
+            )
+            if status:
+                rows = conn.execute(
+                    "SELECT * FROM owner_pairing_challenges WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                    (status.strip().upper(), int(limit)),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM owner_pairing_challenges ORDER BY created_at DESC LIMIT ?",
+                    (int(limit),),
+                ).fetchall()
+            return [self._format_public_challenge(dict(r), now=now) for r in rows]
+
+    def approve_owner_pairing_challenge(
+        self,
+        challenge_id: str,
+        *,
+        secret: str,
+        approved_permission_level: str | None = None,
+        approved_tiers: list[str] | None = None,
+        approved_workspaces: list[str] | None = None,
+        approved_capabilities: list[str] | None = None,
+        approved_ttl_seconds: float | None = None,
+        allow_destructive: bool | None = None,
+        total_operation_budget: int = 5000,
+    ) -> dict[str, Any]:
+        if not challenge_id or not str(challenge_id).strip():
+            raise ValueError("challenge_id is required")
+        if not secret or len(str(secret).strip()) < 16 or str(secret).strip() == "default_secret":
+            raise ValueError("Invalid OAuth signing key for pairing approval")
+        now = time.time()
+        with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM owner_pairing_challenges WHERE challenge_id = ?",
+                (challenge_id.strip(),),
+            ).fetchone()
+            if not row:
+                raise LookupError(f"Pairing challenge '{challenge_id}' does not exist")
+            rec = dict(row)
+            expected_sig = self._sign_owner_pairing_challenge(
+                secret,
+                str(rec["challenge_id"]),
+                str(rec["nonce_hash"]),
+                str(rec["verification_code"]),
+                str(rec["owner_id"]),
+                str(rec["client_id"]),
+                str(rec["auth_method"]),
+                int(rec["verifiable_identity"]),
+                str(rec["oauth_token_jti"]),
+                str(rec["requested_permission_level"]),
+                str(rec["requested_tiers"]),
+                str(rec["requested_workspaces"]),
+                str(rec["requested_capabilities"]),
+                float(rec["requested_ttl_seconds"]),
+                int(rec["allow_destructive"]),
+                float(rec["created_at"]),
+                float(rec["expires_at"]),
+            )
+            if not hmac.compare_digest(str(rec.get("signature") or ""), expected_sig):
+                raise PermissionError("CHALLENGE_TAMPERED: Pairing challenge failed HMAC signature verification")
+
+            used_row = conn.execute(
+                "SELECT outcome FROM owner_pairing_used_nonces WHERE nonce_hash = ?",
+                (rec["nonce_hash"],),
+            ).fetchone()
+            if used_row is not None or str(rec["status"]) in ("APPROVED", "DENIED", "REVOKED"):
+                raise PermissionError(
+                    f"CHALLENGE_ALREADY_USED: Pairing challenge '{challenge_id}' has already been consumed ({rec['status']})"
+                )
+
+            if float(rec["expires_at"]) <= now or str(rec["status"]) == "EXPIRED":
+                conn.execute(
+                    "UPDATE owner_pairing_challenges SET status = 'EXPIRED', decided_at = ? WHERE challenge_id = ?",
+                    (now, challenge_id.strip()),
+                )
+                raise PermissionError(f"CHALLENGE_EXPIRED: Pairing challenge '{challenge_id}' has expired")
+
+            if int(rec["verifiable_identity"]) != 1 or str(rec["auth_method"]) != "oauth":
+                raise PermissionError("UNVERIFIABLE_CLIENT_IDENTITY: Pairing challenge lacks verifiable OAuth client identity")
+
+            conn.execute(
+                """
+                INSERT INTO owner_pairing_used_nonces (nonce_hash, challenge_id, client_id, consumed_at, outcome)
+                VALUES (?, ?, ?, ?, 'APPROVED')
+                """,
+                (rec["nonce_hash"], rec["challenge_id"], rec["client_id"], now),
+            )
+
+        # Compute approved scope (owner can narrow or override requested scope)
+        eff_level = str(approved_permission_level or rec["requested_permission_level"] or "OWNER").strip().upper()
+        req_caps = json.loads(rec.get("requested_capabilities") or "[]")
+        eff_caps = approved_capabilities if approved_capabilities is not None else req_caps
+        if eff_level == "READ":
+            eff_caps = ["FILE_READ"]
+        elif eff_level == "SCOPED" and "OWNER_GLOBAL_FILESYSTEM" in eff_caps and approved_capabilities is None:
+            eff_caps = [c for c in eff_caps if c != "OWNER_GLOBAL_FILESYSTEM"] or ["FILE_READ", "FILE_WRITE", "SHELL", "DESKTOP"]
+
+        eff_allow_dest = bool(allow_destructive) if allow_destructive is not None else bool(rec.get("allow_destructive"))
+        expanded_tools = expand_owner_delegation_capabilities(eff_caps, include_release_deploy=eff_allow_dest)
+        if not expanded_tools:
+            expanded_tools = ["agent_workspace_list", "agent_read_file"]
+        if eff_level == "OWNER" and "OWNER_GLOBAL_FILESYSTEM" in [str(c).upper() for c in eff_caps]:
+            expanded_tools = sorted(set(expanded_tools + ["OWNER_GLOBAL_FILESYSTEM"]))
+
+        req_ws = json.loads(rec.get("requested_workspaces") or "[]")
+        eff_ws = approved_workspaces if approved_workspaces is not None else req_ws
+        if not eff_ws:
+            eff_ws = discover_windows_filesystem_roots() if eff_level == "OWNER" else [str(PROJECT_ROOT.resolve())]
+
+        eff_ttl = min(
+            max(60.0, float(approved_ttl_seconds if approved_ttl_seconds is not None else rec["requested_ttl_seconds"])),
+            86400.0,
+        )
+        rolling_ttl = min(900.0, eff_ttl)
+        rolling_uses = min(100, int(total_operation_budget))
+
+        del_info = self.issue_owner_durable_delegation(
+            secret=secret,
+            allowed_tools=expanded_tools,
+            allowed_paths=[str(p) for p in eff_ws],
+            owner_id=str(rec["owner_id"]),
+            client_id=str(rec["client_id"]),
+            ttl_seconds=eff_ttl,
+            total_operation_budget=int(total_operation_budget),
+            allow_destructive_operations=eff_allow_dest,
+            audit_identity=f"{rec['owner_id']}:{rec['client_id']}:paired:{rec['challenge_id']}",
+        )
+        grant_info = self.issue_owner_capability_grant(
+            secret=secret,
+            allowed_tools=expanded_tools,
+            allowed_paths=[str(p) for p in eff_ws],
+            owner_id=str(rec["owner_id"]),
+            client_id=str(rec["client_id"]),
+            oauth_token_jti=str(rec["oauth_token_jti"]),
+            ttl_seconds=rolling_ttl,
+            max_uses=rolling_uses,
+            delegation_id=del_info["delegation_id"],
+            allow_destructive_operations=eff_allow_dest,
+        )
+        with self._db() as conn:
+            conn.execute(
+                """
+                UPDATE owner_pairing_challenges
+                SET status = 'APPROVED', decided_at = ?, resulting_delegation_id = ?, resulting_grant_id = ?
+                WHERE challenge_id = ?
+                """,
+                (now, del_info["delegation_id"], grant_info["grant_id"], challenge_id.strip()),
+            )
+            updated_row = conn.execute(
+                "SELECT * FROM owner_pairing_challenges WHERE challenge_id = ?",
+                (challenge_id.strip(),),
+            ).fetchone()
+        return {
+            "ok": True,
+            "challenge": self._format_public_challenge(dict(updated_row), now=now) if updated_row else {},
+            "delegation_id": del_info["delegation_id"],
+            "capability_grant_id": grant_info["grant_id"],
+            "client_id": str(rec["client_id"]),
+            "owner_id": str(rec["owner_id"]),
+            "approved_permission_level": eff_level,
+            "approved_workspaces": del_info["allowed_paths"],
+            "approved_tools_count": len(del_info["allowed_tools"]),
+            "allow_destructive_operations": eff_allow_dest,
+            "expires_at": del_info["expires_at"],
+        }
+
+    def deny_owner_pairing_challenge(
+        self,
+        challenge_id: str,
+        *,
+        secret: str,
+        reason: str = "denied_by_owner",
+    ) -> dict[str, Any]:
+        if not challenge_id or not str(challenge_id).strip():
+            raise ValueError("challenge_id is required")
+        now = time.time()
+        with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM owner_pairing_challenges WHERE challenge_id = ?",
+                (challenge_id.strip(),),
+            ).fetchone()
+            if not row:
+                raise LookupError(f"Pairing challenge '{challenge_id}' does not exist")
+            rec = dict(row)
+            used_row = conn.execute(
+                "SELECT outcome FROM owner_pairing_used_nonces WHERE nonce_hash = ?",
+                (rec["nonce_hash"],),
+            ).fetchone()
+            if used_row is not None or str(rec["status"]) in ("APPROVED", "DENIED", "REVOKED"):
+                raise PermissionError(
+                    f"CHALLENGE_ALREADY_USED: Pairing challenge '{challenge_id}' has already been consumed ({rec['status']})"
+                )
+            conn.execute(
+                """
+                INSERT INTO owner_pairing_used_nonces (nonce_hash, challenge_id, client_id, consumed_at, outcome)
+                VALUES (?, ?, ?, ?, 'DENIED')
+                """,
+                (rec["nonce_hash"], rec["challenge_id"], rec["client_id"], now),
+            )
+            conn.execute(
+                """
+                UPDATE owner_pairing_challenges
+                SET status = 'DENIED', refusal_reason = ?, decided_at = ?
+                WHERE challenge_id = ?
+                """,
+                (str(reason or "denied_by_owner"), now, challenge_id.strip()),
+            )
+            updated = conn.execute(
+                "SELECT * FROM owner_pairing_challenges WHERE challenge_id = ?",
+                (challenge_id.strip(),),
+            ).fetchone()
+        return {
+            "ok": True,
+            "challenge": self._format_public_challenge(dict(updated), now=now) if updated else {},
+            "status": "DENIED",
+            "reason": str(reason or "denied_by_owner"),
+        }
+
+    def list_active_owner_delegations(
+        self,
+        *,
+        secret: str,
+        client_id: str | None = None,
+        owner_id: str = "local_owner",
+    ) -> list[dict[str, Any]]:
+        now = time.time()
+        out: list[dict[str, Any]] = []
+        with self._db() as conn:
+            if client_id:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM owner_durable_delegations
+                    WHERE owner_id = ? AND client_id = ?
+                      AND revoked = 0 AND expires_at > ? AND total_used_count < total_operation_budget
+                    ORDER BY issued_at DESC
+                    """,
+                    (owner_id, client_id, now),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM owner_durable_delegations
+                    WHERE owner_id = ?
+                      AND revoked = 0 AND expires_at > ? AND total_used_count < total_operation_budget
+                    ORDER BY issued_at DESC
+                    """,
+                    (owner_id, now),
+                ).fetchall()
+            for r in rows:
+                d = dict(r)
+                if secret and len(str(secret).strip()) >= 16:
+                    expected_sig = self._sign_owner_durable_delegation(
+                        secret,
+                        str(d["delegation_id"]),
+                        str(d["owner_id"]),
+                        str(d["client_id"]),
+                        str(d["allowed_tools"]),
+                        str(d["allowed_paths"]),
+                        float(d["issued_at"]),
+                        float(d["expires_at"]),
+                        int(d["total_operation_budget"]),
+                        int(d["allow_destructive_operations"]),
+                        str(d["audit_identity"]),
+                    )
+                    if not hmac.compare_digest(str(d.get("signature") or ""), expected_sig):
+                        continue
+                tools = json.loads(d.get("allowed_tools") or "[]")
+                paths = json.loads(d.get("allowed_paths") or "[]")
+                has_global_fs = "OWNER_GLOBAL_FILESYSTEM" in tools or "*" in tools
+                out.append({
+                    "delegation_id": d["delegation_id"],
+                    "owner_id": d["owner_id"],
+                    "client_id": d["client_id"],
+                    "allowed_tools": tools,
+                    "allowed_workspaces": paths,
+                    "issued_at": float(d["issued_at"]),
+                    "expires_at": float(d["expires_at"]),
+                    "remaining_seconds": max(0, int(float(d["expires_at"]) - now)),
+                    "total_operation_budget": int(d["total_operation_budget"]),
+                    "total_used_count": int(d["total_used_count"]),
+                    "allow_destructive_operations": bool(d.get("allow_destructive_operations")),
+                    "owner_global_filesystem": has_global_fs,
+                })
+        return out
+
+    def count_active_owner_grants(
+        self,
+        *,
+        client_id: str | None = None,
+        owner_id: str = "local_owner",
+    ) -> int:
+        now = time.time()
+        with self._db() as conn:
+            if client_id:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c FROM owner_capability_grants
+                    WHERE owner_id = ? AND client_id = ?
+                      AND revoked = 0 AND expires_at > ? AND used_count < max_uses
+                    """,
+                    (owner_id, client_id, now),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c FROM owner_capability_grants
+                    WHERE owner_id = ?
+                      AND revoked = 0 AND expires_at > ? AND used_count < max_uses
+                    """,
+                    (owner_id, now),
+                ).fetchone()
+            return int(row["c"]) if row else 0
+
+    def has_active_owner_delegation_or_grant(
+        self,
+        *,
+        secret: str,
+        owner_id: str = "local_owner",
+        client_id: str,
+        oauth_token_jti: str = "",
+    ) -> bool:
+        if not client_id:
+            return False
+        dels = self.list_active_owner_delegations(secret=secret, client_id=client_id, owner_id=owner_id)
+        if dels:
+            return True
+        now = time.time()
+        with self._db() as conn:
+            if oauth_token_jti:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM owner_capability_grants
+                    WHERE owner_id = ? AND client_id = ? AND oauth_token_jti = ?
+                      AND revoked = 0 AND expires_at > ? AND used_count < max_uses
+                    """,
+                    (owner_id, client_id, oauth_token_jti, now),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM owner_capability_grants
+                    WHERE owner_id = ? AND client_id = ?
+                      AND revoked = 0 AND expires_at > ? AND used_count < max_uses
+                    """,
+                    (owner_id, client_id, now),
+                ).fetchall()
+            for r in rows:
+                g = dict(r)
+                if secret and len(str(secret).strip()) >= 16:
+                    expected_sig = self._sign_owner_grant(
+                        secret,
+                        g["grant_id"],
+                        g["owner_id"],
+                        g["client_id"],
+                        g["oauth_token_jti"],
+                        g["allowed_tools"],
+                        g["allowed_paths"],
+                        float(g["issued_at"]),
+                        float(g["expires_at"]),
+                        int(g["max_uses"]),
+                    )
+                    if not hmac.compare_digest(str(g.get("signature") or ""), expected_sig):
+                        continue
+                return True
+        return False
+
+    def has_any_owner_records_for_client(
+        self,
+        *,
+        owner_id: str = "local_owner",
+        client_id: str,
+    ) -> bool:
+        if not client_id:
+            return False
+        with self._db() as conn:
+            c1 = conn.execute(
+                "SELECT COUNT(*) AS c FROM owner_durable_delegations WHERE owner_id = ? AND client_id = ?",
+                (owner_id, client_id),
+            ).fetchone()["c"]
+            if c1 > 0:
+                return True
+            c2 = conn.execute(
+                "SELECT COUNT(*) AS c FROM owner_capability_grants WHERE owner_id = ? AND client_id = ?",
+                (owner_id, client_id),
+            ).fetchone()["c"]
+            return c2 > 0
+
+    def revoke_owner_access(
+        self,
+        *,
+        delegation_id: str | None = None,
+        grant_id: str | None = None,
+        client_id: str | None = None,
+        revoke_all: bool = False,
+        reason: str = "revoked_by_owner",
+    ) -> dict[str, Any]:
+        now = time.time()
+        revoked_delegations = 0
+        revoked_grants = 0
+        revoked_tokens = 0
+        with self._db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if revoke_all:
+                jtis = [
+                    str(r["oauth_token_jti"])
+                    for r in conn.execute(
+                        "SELECT DISTINCT oauth_token_jti FROM owner_capability_grants WHERE oauth_token_jti != ''"
+                    ).fetchall()
+                ]
+                revoked_delegations = conn.execute(
+                    "UPDATE owner_durable_delegations SET revoked = 1, revoked_reason = ? WHERE revoked = 0",
+                    (reason,),
+                ).rowcount
+                revoked_grants = conn.execute(
+                    "UPDATE owner_capability_grants SET revoked = 1, revoked_reason = ? WHERE revoked = 0",
+                    (reason,),
+                ).rowcount
+                conn.execute("UPDATE owner_cloud_leases SET revoked = 1 WHERE revoked = 0")
+                conn.execute(
+                    "UPDATE owner_pairing_challenges SET status = 'REVOKED', refusal_reason = ? WHERE status IN ('PENDING', 'APPROVED')",
+                    (reason,),
+                )
+                for jti in jtis:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO oauth_revocations (token_id, client_id, revoked_at, expires_at, reason)
+                        VALUES (?, '', ?, ?, ?)
+                        """,
+                        (jti, now, now + 86400 * 30, reason),
+                    )
+                    revoked_tokens += 1
+            elif client_id:
+                jtis = [
+                    str(r["oauth_token_jti"])
+                    for r in conn.execute(
+                        "SELECT DISTINCT oauth_token_jti FROM owner_capability_grants WHERE client_id = ? AND oauth_token_jti != ''",
+                        (client_id,),
+                    ).fetchall()
+                ]
+                revoked_delegations = conn.execute(
+                    "UPDATE owner_durable_delegations SET revoked = 1, revoked_reason = ? WHERE client_id = ? AND revoked = 0",
+                    (reason, client_id),
+                ).rowcount
+                revoked_grants = conn.execute(
+                    "UPDATE owner_capability_grants SET revoked = 1, revoked_reason = ? WHERE client_id = ? AND revoked = 0",
+                    (reason, client_id),
+                ).rowcount
+                conn.execute(
+                    """
+                    UPDATE owner_cloud_leases SET revoked = 1
+                    WHERE grant_id IN (SELECT grant_id FROM owner_capability_grants WHERE client_id = ?)
+                    """,
+                    (client_id,),
+                )
+                conn.execute(
+                    "UPDATE owner_pairing_challenges SET status = 'REVOKED', refusal_reason = ? WHERE client_id = ? AND status IN ('PENDING', 'APPROVED')",
+                    (reason, client_id),
+                )
+                for jti in jtis:
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO oauth_revocations (token_id, client_id, revoked_at, expires_at, reason)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (jti, client_id, now, now + 86400 * 30, reason),
+                    )
+                    revoked_tokens += 1
+            else:
+                if delegation_id:
+                    revoked_delegations += conn.execute(
+                        "UPDATE owner_durable_delegations SET revoked = 1, revoked_reason = ? WHERE delegation_id = ? AND revoked = 0",
+                        (reason, delegation_id),
+                    ).rowcount
+                    revoked_grants += conn.execute(
+                        "UPDATE owner_capability_grants SET revoked = 1, revoked_reason = ? WHERE delegation_id = ? AND revoked = 0",
+                        (f"parent_delegation_revoked:{reason}", delegation_id),
+                    ).rowcount
+                    conn.execute(
+                        """
+                        UPDATE owner_cloud_leases SET revoked = 1
+                        WHERE grant_id IN (SELECT grant_id FROM owner_capability_grants WHERE delegation_id = ?)
+                        """,
+                        (delegation_id,),
+                    )
+                if grant_id:
+                    revoked_grants += conn.execute(
+                        "UPDATE owner_capability_grants SET revoked = 1, revoked_reason = ? WHERE grant_id = ? AND revoked = 0",
+                        (reason, grant_id),
+                    ).rowcount
+                    conn.execute(
+                        "UPDATE owner_cloud_leases SET revoked = 1 WHERE grant_id = ?",
+                        (grant_id,),
+                    )
+        return {
+            "ok": True,
+            "revoked": bool(revoked_delegations > 0 or revoked_grants > 0 or revoked_tokens > 0 or revoke_all),
+            "revoked_delegations": revoked_delegations,
+            "revoked_grants": revoked_grants,
+            "revoked_tokens": revoked_tokens,
+            "reason": reason,
+        }
+
 
 def resolve_oauth_db_path(
     db_path: str | Path | None = None,
@@ -1922,7 +2770,31 @@ def _authenticate_autonomous_caller(
             and bool(payload.get("client_id"))
             and ("mcp:owner" in token_scopes or "mcp:all" in token_scopes)
         )
-        tier = "SYSTEM_ADMIN" if is_owner else ("WRITE" if "mcp:coding:write" in token_scopes else "READ")
+        persistence_obj = getattr(app.state, "oauth_persistence", None)
+        signing_key_str = str(getattr(app.state, "oauth_signing_key", "") or "")
+        if (
+            persistence_obj is not None
+            and signing_key_str
+            and token_owner == expected_owner_id
+            and bool(token_jti)
+            and bool(token_identity)
+        ):
+            try:
+                if hasattr(persistence_obj, "has_active_owner_delegation_or_grant") and persistence_obj.has_active_owner_delegation_or_grant(
+                    secret=signing_key_str,
+                    owner_id=expected_owner_id,
+                    client_id=token_identity,
+                    oauth_token_jti=token_jti,
+                ):
+                    is_owner = True
+                    token_scopes = token_scopes | frozenset(["mcp:owner", "mcp:coding:write"])
+            except Exception:
+                pass
+        server_profile = str(getattr(gw.policy, "profile", "read_only")) if getattr(gw, "policy", None) else "read_only"
+        if server_profile == "read_only":
+            tier = "READ"
+        else:
+            tier = "SYSTEM_ADMIN" if is_owner else ("WRITE" if "mcp:coding:write" in token_scopes else "READ")
         header_grant_id = str(request.headers.get("x-mcp-owner-grant-id") or "").strip() if is_owner else ""
         try:
             from runtime.contracts import AuthPrincipal
@@ -2132,7 +3004,7 @@ def _handle_mcp_stream_session(
     req_id = payload.get("id") if isinstance(payload, dict) else None
 
     if is_init:
-        mcp_sess_id = client_sess if client_sess else f"sess_mcp_{uuid.uuid4().hex[:16]}"
+        mcp_sess_id = f"sess_mcp_{secrets.token_hex(16)}"
         app.state.mcp_stream_sessions[mcp_sess_id] = authenticated_identity
         resp_headers["Mcp-Session-Id"] = mcp_sess_id
         return True, mcp_sess_id, resp_headers, None
@@ -2148,8 +3020,16 @@ def _handle_mcp_stream_session(
                     message="Forbidden (H04): Mcp-Session-Id header mismatch with authenticated caller identity",
                 )
                 return False, "", {}, err_resp
-        else:
+        elif re.fullmatch(r"sess_mcp_[0-9a-f]{16,64}", client_sess):
             app.state.mcp_stream_sessions[client_sess] = authenticated_identity
+        else:
+            err_resp = _jsonrpc_auth_error_response(
+                status_code=404,
+                req_id=req_id,
+                code=-32000,
+                message="MCP session expired or unknown; initialize a new session without Mcp-Session-Id",
+            )
+            return False, "", {}, err_resp
 
         resp_headers["Mcp-Session-Id"] = client_sess
         return True, client_sess, resp_headers, None
@@ -2496,7 +3376,26 @@ def register_oauth_endpoints(
                 )
 
         grant_types = body.get("grant_types") or ["authorization_code", "refresh_token", "client_credentials"]
-        scope = body.get("scope") or "mcp:autonomous"
+        raw_scope = str(body.get("scope") or "mcp:autonomous").strip()
+        supported_dcr_scopes = {
+            "mcp:tools",
+            "mcp:autonomous",
+            "mcp:tasks:write",
+            "mcp:tasks:read",
+            "mcp:coding:write",
+            "mcp:owner",
+            "mcp:all",
+        }
+        req_scope_tokens = [s for s in raw_scope.split() if s]
+        if not req_scope_tokens or any(s not in supported_dcr_scopes for s in req_scope_tokens):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_client_metadata",
+                    "error_description": f"Unsupported OAuth scope in client registration: {raw_scope}",
+                },
+            )
+        scope = " ".join(req_scope_tokens)
 
         expected_owner = getattr(app.state, "expected_owner_id", "local_owner")
         caller_owner_id = body.get("owner_id")
@@ -2521,8 +3420,36 @@ def register_oauth_endpoints(
                 )
 
         owner_id = expected_owner
-        client_id = body.get("client_id") or f"mcp_client_{uuid.uuid4().hex[:16]}"
-        client_secret = f"mcp_sec_{uuid.uuid4().hex}"
+        requested_client_id = str(body.get("client_id") or "").strip()
+        if requested_client_id:
+            if not CLEAN_CALLER_ID_RE.match(requested_client_id) or requested_client_id.lower() in FORBIDDEN_CALLER_ROLES:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "invalid_client_metadata", "error_description": "Invalid client_id format"},
+                )
+            admin_hdr = request.headers.get("x-mcp-owner-admin-token", "").strip()
+            owner_admin_sec = str(getattr(app.state, "owner_admin_token", "") or "")
+            is_owner_admin_dcr = bool(admin_hdr and owner_admin_sec and _verify_caller_token(admin_hdr, owner_admin_sec))
+            existing_rec = app.state.oauth_persistence.get_client(requested_client_id)
+            has_owner_recs = (
+                hasattr(app.state.oauth_persistence, "has_any_owner_records_for_client")
+                and app.state.oauth_persistence.has_any_owner_records_for_client(
+                    owner_id=expected_owner,
+                    client_id=requested_client_id,
+                )
+            )
+            if not is_owner_admin_dcr and (existing_rec is not None or has_owner_recs or requested_client_id == "chatgpt_web_owner_client"):
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": "access_denied",
+                        "error_description": "Forbidden (P0-1): Cannot overwrite or claim an existing or reserved OAuth client_id without local owner admin authentication",
+                    },
+                )
+            client_id = requested_client_id
+        else:
+            client_id = f"mcp_client_{secrets.token_hex(16)}"
+        client_secret = f"mcp_sec_{secrets.token_hex(24)}"
         client_secret_hash = hashlib.sha256(client_secret.encode("utf-8")).hexdigest()
 
         app.state.oauth_persistence.register_client(
@@ -2698,6 +3625,15 @@ def register_oauth_endpoints(
                 content={
                     "error": "access_denied",
                     "error_description": "Invalid owner authentication credential",
+                },
+            )
+
+        if not code_challenge or code_challenge_method != "S256":
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_request",
+                    "error_description": "PKCE with code_challenge_method=S256 is required (H05)",
                 },
             )
 
@@ -2923,6 +3859,14 @@ def register_oauth_endpoints(
                         "error_description": "Redirect URI mismatch for authorization code",
                     },
                 )
+            if (rec.get("code_challenge_method") or "S256").upper() != "S256" or not rec.get("code_challenge"):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "invalid_grant",
+                        "error_description": "PKCE S256 code_challenge is mandatory",
+                    },
+                )
 
             computed_challenge = (
                 base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode("ascii")).digest())
@@ -3015,6 +3959,25 @@ def register_oauth_endpoints(
             scope = payload.get("scope", "mcp:autonomous")
             res = payload.get("resource", "mcp-autonomous")
 
+            # P1-2 Fix: Single-use refresh token rotation — immediately revoke the consumed refresh token and its JTI
+            old_ref_jti = str(payload.get("jti") or "").strip()
+            old_ref_exp = float(payload.get("exp", time.time() + 86400 * 30))
+            app.state.revoked_oauth_tokens.add(refresh_token)
+            app.state.oauth_persistence.revoke_token(
+                refresh_token,
+                client_id=c_id,
+                expires_at=old_ref_exp,
+                reason="refresh_token_rotated",
+            )
+            if old_ref_jti:
+                app.state.revoked_oauth_tokens.add(old_ref_jti)
+                app.state.oauth_persistence.revoke_token(
+                    old_ref_jti,
+                    client_id=c_id,
+                    expires_at=old_ref_exp,
+                    reason="refresh_token_rotated_jti",
+                )
+
             tok_info = _issue_oauth_token(
                 client_id=c_id,
                 secret=app.state.oauth_signing_key,
@@ -3036,7 +3999,19 @@ def register_oauth_endpoints(
                 typ="refresh",
             )
             tok_info["refresh_token"] = new_ref_info["access_token"]
-            if "mcp:owner" in str(scope).split() or "mcp:all" in str(scope).split():
+            has_active_owner = (
+                "mcp:owner" in str(scope).split()
+                or "mcp:all" in str(scope).split()
+                or (
+                    hasattr(app.state.oauth_persistence, "has_active_owner_delegation_or_grant")
+                    and app.state.oauth_persistence.has_active_owner_delegation_or_grant(
+                        secret=app.state.oauth_signing_key,
+                        owner_id=o_id,
+                        client_id=c_id,
+                    )
+                )
+            )
+            if has_active_owner:
                 try:
                     ok_new, new_claims, _ = _verify_oauth_token(
                         tok_info["access_token"],
@@ -3155,6 +4130,15 @@ def register_oauth_endpoints(
                                 expires_at=exp,
                                 reason="revocation_endpoint_jti",
                             )
+                            # P1-2 Fix: Cascade revocation to any capability grants bound to this token JTI
+                            try:
+                                with app.state.oauth_persistence._db() as conn:
+                                    conn.execute(
+                                        "UPDATE owner_capability_grants SET revoked = 1, revoked_reason = 'oauth_token_revoked' WHERE oauth_token_jti = ?",
+                                        (jti,),
+                                    )
+                            except Exception:
+                                pass
                     except Exception:
                         pass
         return JSONResponse(status_code=200, content={"ok": True, "status": "revoked"})
@@ -3724,6 +4708,465 @@ def register_oauth_endpoints(
         )
         return JSONResponse(status_code=200, content={"ok": True, "delegation_id": delegation_id, "revoked": revoked})
 
+    # ------------------------------------------------------------------
+    # Verifiable Owner Pairing & Unified Effective-Permission Endpoints (Phase 2 P0)
+    # ------------------------------------------------------------------
+    def _require_loopback_owner_admin(
+        request: Request,
+        body: dict[str, Any],
+        endpoint_name: str,
+    ) -> JSONResponse | None:
+        client_host = (request.client.host if request.client else "").strip().lower()
+        if client_host and client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+            _audit_grant_admin_event(
+                endpoint_name,
+                "DENY",
+                f"Rejected non-loopback host '{client_host}' on local owner admin endpoint",
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_description": "Local owner administration endpoints are restricted to Windows loopback (127.0.0.1)",
+                },
+            )
+        caller_secret = str(getattr(app.state, "caller_auth_token", "") or "")
+        owner_admin_secret = str(getattr(app.state, "owner_admin_token", "") or "")
+        header_bearer = _extract_caller_token(request) or ""
+        header_admin = request.headers.get("x-mcp-owner-admin-token", "").strip()
+        body_admin = str(body.get("owner_admin_token") or "").strip()
+
+        for cand in (header_bearer, header_admin, body_admin):
+            if cand and caller_secret and _verify_caller_token(cand, caller_secret):
+                _audit_grant_admin_event(
+                    endpoint_name,
+                    "DENY",
+                    "Forbidden (P0): Shared tunnel bearer credential cannot authenticate local owner administration",
+                )
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "ok": False,
+                        "error": "access_denied",
+                        "error_description": "Forbidden (P0): Shared tunnel bearer credential cannot approve pairing or manage owner state",
+                    },
+                )
+
+        admin_candidate = header_admin or body_admin or (header_bearer if header_bearer.startswith("mcp_oadm_") else "")
+        if not admin_candidate or not owner_admin_secret or not _verify_caller_token(admin_candidate, owner_admin_secret):
+            _audit_grant_admin_event(
+                endpoint_name,
+                "DENY",
+                "Missing or invalid local owner_admin_token on owner administration endpoint",
+            )
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_description": "Independent local owner administration credential (X-MCP-Owner-Admin-Token) is required",
+                },
+            )
+        return None
+
+    def _compute_owner_status_snapshot() -> dict[str, Any]:
+        gw_ref = getattr(app.state, "gateway", None)
+        pol = getattr(gw_ref, "policy", None) if gw_ref is not None else None
+        profile_name = str(getattr(pol, "profile", "read_only")) if pol is not None else "read_only"
+        is_estop = bool(gw_ref.is_emergency_stop_active()) if (gw_ref is not None and hasattr(gw_ref, "is_emergency_stop_active")) else False
+        pers = app.state.oauth_persistence
+        sk = str(getattr(app.state, "oauth_signing_key", "") or "")
+        expected_owner = getattr(app.state, "expected_owner_id", "local_owner")
+
+        cg_state = pers.get_chatgpt_connection_state() if hasattr(pers, "get_chatgpt_connection_state") else {}
+        active_dels = pers.list_active_owner_delegations(secret=sk, owner_id=expected_owner) if hasattr(pers, "list_active_owner_delegations") else []
+        active_grants_cnt = pers.count_active_owner_grants(owner_id=expected_owner) if hasattr(pers, "count_active_owner_grants") else 0
+        pending_challenges = pers.list_owner_pairing_challenges(status="PENDING") if hasattr(pers, "list_owner_pairing_challenges") else []
+
+        has_verified_owner = bool(len(active_dels) > 0 or active_grants_cnt > 0)
+        top_del = active_dels[0] if active_dels else None
+        verified_cid = str(top_del["client_id"]) if top_del else ""
+        expires_iso = (
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(top_del["expires_at"])))
+            if top_del and top_del.get("expires_at")
+            else None
+        )
+        rem_sec = int(top_del.get("remaining_seconds", 0)) if top_del else 0
+
+        enabled_tiers = sorted(t.value for t in getattr(pol, "enabled_tiers", frozenset())) if pol is not None else ["READ"]
+        if is_estop or profile_name == "read_only":
+            eff_level = "READ"
+            eff_tiers = ["READ"]
+            eff_workspaces = [str(r) for r in getattr(pol, "read_roots", [PROJECT_ROOT])] if pol is not None else [str(PROJECT_ROOT)]
+            allow_dest = False
+            owner_control_ready = False
+        elif has_verified_owner and profile_name in ("owner_full_control", "full_agent"):
+            eff_level = "OWNER" if bool(getattr(pol, "unrestricted_workspace_access", False) and (not top_del or top_del.get("owner_global_filesystem"))) else "SCOPED"
+            eff_tiers = enabled_tiers
+            eff_workspaces = top_del["allowed_workspaces"] if top_del else [str(r) for r in getattr(pol, "write_roots", [PROJECT_ROOT])]
+            allow_dest = bool(top_del.get("allow_destructive_operations", False)) if top_del else False
+            owner_control_ready = True
+        elif has_verified_owner or profile_name in ("developer_p2", "desktop_p3"):
+            eff_level = "SCOPED" if has_verified_owner else "READ"
+            eff_tiers = enabled_tiers if has_verified_owner else ["READ"]
+            eff_workspaces = (top_del["allowed_workspaces"] if top_del else [str(r) for r in getattr(pol, "write_roots", [PROJECT_ROOT])])
+            allow_dest = bool(top_del.get("allow_destructive_operations", False)) if top_del else False
+            owner_control_ready = False
+        else:
+            eff_level = "READ"
+            eff_tiers = ["READ"]
+            eff_workspaces = [str(r) for r in getattr(pol, "read_roots", [PROJECT_ROOT])] if pol is not None else [str(PROJECT_ROOT)]
+            allow_dest = False
+            owner_control_ready = False
+
+        if is_estop:
+            state_machine = "REVOKED_OR_EXPIRED"
+        elif owner_control_ready and has_verified_owner:
+            state_machine = "OWNER_CONTROL_READY"
+        elif has_verified_owner:
+            state_machine = "OWNER_VERIFIED"
+        elif bool(cg_state.get("verified_read_tool_call")):
+            state_machine = "CHATGPT_CONNECTED"
+        else:
+            state_machine = "LOCAL_READY"
+
+        return {
+            "ok": True,
+            "state": state_machine,
+            "profile": profile_name,
+            "emergency_stop": is_estop,
+            "local_auth_enforced": bool(getattr(app.state, "require_autonomous_auth", True)),
+            "allow_loopback_tunnel_identity": bool(getattr(app.state, "allow_loopback_tunnel_identity", False)),
+            "chatgpt_connection": {
+                "verified_read_tool_call": bool(cg_state.get("verified_read_tool_call", False)),
+                "last_verified_tool": cg_state.get("last_verified_tool"),
+                "last_verified_at": cg_state.get("last_verified_at"),
+                "last_auth_mode": cg_state.get("last_auth_mode", "none"),
+                "last_client_id_masked": cg_state.get("last_client_id_masked", ""),
+                "supports_verifiable_owner_identity": bool(cg_state.get("supports_verifiable_owner_identity", False)),
+            },
+            "owner_identity": {
+                "verified": has_verified_owner,
+                "owner_id": expected_owner if has_verified_owner else None,
+                "client_id": verified_cid or None,
+                "client_id_masked": (f"{verified_cid[:12]}..." if len(verified_cid) > 15 else verified_cid) if verified_cid else "",
+                "auth_method": "oauth_2_1_pkce" if has_verified_owner else "none",
+                "active_delegation_id": top_del["delegation_id"] if top_del else None,
+                "active_delegations_count": len(active_dels),
+                "active_grants_count": active_grants_cnt,
+                "pending_challenges_count": len(pending_challenges),
+                "expires_at": expires_iso,
+                "remaining_seconds": rem_sec,
+                "revoked": not has_verified_owner and bool(
+                    verified_cid and pers.has_any_owner_records_for_client(owner_id=expected_owner, client_id=verified_cid)
+                ),
+            },
+            "effective_permissions": {
+                "level": eff_level,
+                "enabled_tiers": eff_tiers,
+                "allowed_workspaces": eff_workspaces,
+                "allow_destructive_operations": allow_dest,
+                "owner_control_ready": owner_control_ready,
+                "unverifiable_session_escalation_blocked": True,
+            },
+            "active_delegations": active_dels,
+            "pending_challenges": pending_challenges,
+        }
+
+    @app.post("/oauth/pairing/request")
+    async def oauth_pairing_request(request: Request) -> Response:
+        disallowed_err = _check_disallowed_query_secrets(request)
+        if disallowed_err is not None:
+            return disallowed_err
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_request", "error_description": "JSON object body expected"})
+
+        gw_ref = getattr(app.state, "gateway", None)
+        ok_auth, identity, status_code, auth_err = _authenticate_autonomous_caller(request, app, gw_ref, require_auth=True)
+        if not ok_auth:
+            return JSONResponse(
+                status_code=status_code,
+                content={"ok": False, "error": "unauthorized", "error_description": auth_err},
+            )
+        principal = getattr(request.state, "auth_principal", None)
+        auth_method = str(getattr(principal, "auth_method", "") if principal is not None else "")
+        if principal is None or auth_method != "oauth":
+            _audit_grant_admin_event(
+                "oauth_pairing_request",
+                "DENY",
+                f"Refused owner pairing request for unverifiable client identity (auth_method={auth_method or 'none'}, caller={identity})",
+                {"caller_id": identity, "auth_method": auth_method or "none"},
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "ok": False,
+                    "error": "unverifiable_client_identity",
+                    "error_code": "UNVERIFIABLE_CLIENT_IDENTITY",
+                    "error_description": (
+                        "Refused: Authentication: None or shared tunnel bearer credentials do not provide "
+                        "a verifiable per-client identity and cannot request or escalate to owner privileges. "
+                        "Connect with an OAuth 2.1 client identity to pair as owner."
+                    ),
+                },
+            )
+
+        meta = getattr(principal, "metadata", {}) or {}
+        p_tok = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
+        verified_cid = str(getattr(principal, "client_id", "") or p_tok.get("client_id") or "").strip()
+        verified_jti = str(p_tok.get("jti") or meta.get("jti") or "").strip()
+        req_cid = str(body.get("client_id") or "").strip()
+        if req_cid and req_cid != verified_cid:
+            _audit_grant_admin_event(
+                "oauth_pairing_request",
+                "DENY",
+                f"Client '{verified_cid}' attempted to request pairing for foreign client_id '{req_cid}'",
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "ok": False,
+                    "error": "access_denied",
+                    "error_description": "Forbidden: Cannot request pairing challenge for a different OAuth client_id",
+                },
+            )
+
+        try:
+            challenge = app.state.oauth_persistence.create_owner_pairing_challenge(
+                secret=app.state.oauth_signing_key,
+                client_id=verified_cid,
+                client_name=str(body.get("client_name") or ""),
+                auth_method="oauth",
+                oauth_token_jti=verified_jti,
+                owner_id=getattr(app.state, "expected_owner_id", "local_owner"),
+                requested_permission_level=str(body.get("requested_permission_level") or "OWNER"),
+                requested_tiers=body.get("requested_tiers"),
+                requested_workspaces=body.get("requested_workspaces"),
+                requested_capabilities=body.get("requested_capabilities"),
+                requested_ttl_seconds=float(body.get("requested_ttl_seconds", 28800.0)),
+                allow_destructive=bool(body.get("allow_destructive", False)),
+                challenge_ttl_seconds=float(body.get("challenge_ttl_seconds", 300.0)),
+            )
+        except PermissionError as exc:
+            return JSONResponse(
+                status_code=403,
+                content={"ok": False, "error": "unverifiable_client_identity", "error_code": "UNVERIFIABLE_CLIENT_IDENTITY", "error_description": str(exc)},
+            )
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_request", "error_description": str(exc)})
+
+        _audit_grant_admin_event(
+            "oauth_pairing_request",
+            "PERMIT",
+            f"Created owner pairing challenge {challenge['challenge_id']} for verified OAuth client {verified_cid}",
+            {"challenge_id": challenge["challenge_id"], "client_id": verified_cid, "verification_code": challenge["verification_code"]},
+        )
+        return JSONResponse(status_code=201, content={"ok": True, **challenge})
+
+    @app.get("/oauth/pairing/challenges")
+    async def oauth_list_pairing_challenges(request: Request) -> Response:
+        disallowed_err = _check_disallowed_query_secrets(request)
+        if disallowed_err is not None:
+            return disallowed_err
+        admin_err = _require_loopback_owner_admin(request, {}, "oauth_list_pairing_challenges")
+        if admin_err is not None:
+            return admin_err
+        status_filter = request.query_params.get("status")
+        challenges = app.state.oauth_persistence.list_owner_pairing_challenges(status=status_filter)
+        pending_cnt = sum(1 for c in challenges if c.get("status") == "PENDING")
+        return JSONResponse(
+            status_code=200,
+            content={"ok": True, "challenges": challenges, "pending_count": pending_cnt},
+        )
+
+    @app.post("/oauth/pairing/challenges/{challenge_id}/approve")
+    async def oauth_approve_pairing_challenge(challenge_id: str, request: Request) -> Response:
+        disallowed_err = _check_disallowed_query_secrets(request)
+        if disallowed_err is not None:
+            return disallowed_err
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_request", "error_description": "JSON object body expected"})
+
+        admin_err = _require_loopback_owner_admin(request, body, "oauth_approve_pairing_challenge")
+        if admin_err is not None:
+            return admin_err
+
+        try:
+            res = app.state.oauth_persistence.approve_owner_pairing_challenge(
+                challenge_id,
+                secret=app.state.oauth_signing_key,
+                approved_permission_level=body.get("approved_permission_level"),
+                approved_tiers=body.get("approved_tiers"),
+                approved_workspaces=body.get("approved_workspaces"),
+                approved_capabilities=body.get("approved_capabilities"),
+                approved_ttl_seconds=float(body["approved_ttl_seconds"]) if body.get("approved_ttl_seconds") is not None else None,
+                allow_destructive=bool(body["allow_destructive"]) if body.get("allow_destructive") is not None else None,
+                total_operation_budget=int(body.get("total_operation_budget", 5000)),
+            )
+        except LookupError as exc:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "not_found", "error_description": str(exc)})
+        except PermissionError as exc:
+            err_str = str(exc)
+            code = "CHALLENGE_EXPIRED" if "CHALLENGE_EXPIRED" in err_str else ("CHALLENGE_ALREADY_USED" if "CHALLENGE_ALREADY_USED" in err_str else "PAIRING_DENIED")
+            _audit_grant_admin_event(
+                "oauth_approve_pairing_challenge",
+                "DENY",
+                err_str,
+                {"challenge_id": challenge_id, "error_code": code},
+            )
+            return JSONResponse(
+                status_code=409 if code in ("CHALLENGE_EXPIRED", "CHALLENGE_ALREADY_USED") else 403,
+                content={"ok": False, "error": "invalid_grant", "error_code": code, "error_description": err_str},
+            )
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_request", "error_description": str(exc)})
+
+        _audit_grant_admin_event(
+            "oauth_approve_pairing_challenge",
+            "PERMIT",
+            f"Approved owner pairing challenge {challenge_id} for client {res.get('client_id')} -> delegation {res.get('delegation_id')}",
+            {
+                "challenge_id": challenge_id,
+                "client_id": res.get("client_id"),
+                "delegation_id": res.get("delegation_id"),
+                "capability_grant_id": res.get("capability_grant_id"),
+                "approved_permission_level": res.get("approved_permission_level"),
+            },
+        )
+        return JSONResponse(status_code=200, content={**res, "owner_status": _compute_owner_status_snapshot()})
+
+    @app.post("/oauth/pairing/challenges/{challenge_id}/deny")
+    async def oauth_deny_pairing_challenge(challenge_id: str, request: Request) -> Response:
+        disallowed_err = _check_disallowed_query_secrets(request)
+        if disallowed_err is not None:
+            return disallowed_err
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_request", "error_description": "JSON object body expected"})
+
+        admin_err = _require_loopback_owner_admin(request, body, "oauth_deny_pairing_challenge")
+        if admin_err is not None:
+            return admin_err
+
+        reason = str(body.get("reason") or "denied_by_owner")
+        try:
+            res = app.state.oauth_persistence.deny_owner_pairing_challenge(
+                challenge_id,
+                secret=app.state.oauth_signing_key,
+                reason=reason,
+            )
+        except LookupError as exc:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "not_found", "error_description": str(exc)})
+        except PermissionError as exc:
+            return JSONResponse(status_code=409, content={"ok": False, "error": "invalid_grant", "error_code": "CHALLENGE_ALREADY_USED", "error_description": str(exc)})
+
+        _audit_grant_admin_event(
+            "oauth_deny_pairing_challenge",
+            "PERMIT",
+            f"Denied owner pairing challenge {challenge_id} (reason={reason})",
+            {"challenge_id": challenge_id, "reason": reason},
+        )
+        return JSONResponse(status_code=200, content={**res, "owner_status": _compute_owner_status_snapshot()})
+
+    @app.get("/oauth/owner/status")
+    async def oauth_owner_status(request: Request) -> Response:
+        disallowed_err = _check_disallowed_query_secrets(request)
+        if disallowed_err is not None:
+            return disallowed_err
+        admin_err = _require_loopback_owner_admin(request, {}, "oauth_owner_status")
+        if admin_err is not None:
+            return admin_err
+        return JSONResponse(status_code=200, content=_compute_owner_status_snapshot())
+
+    @app.post("/oauth/owner/revoke")
+    async def oauth_owner_revoke(request: Request) -> Response:
+        disallowed_err = _check_disallowed_query_secrets(request)
+        if disallowed_err is not None:
+            return disallowed_err
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_request", "error_description": "JSON object body expected"})
+
+        admin_err = _require_loopback_owner_admin(request, body, "oauth_owner_revoke")
+        if admin_err is not None:
+            return admin_err
+
+        delegation_id = str(body.get("delegation_id") or "").strip() or None
+        grant_id = str(body.get("grant_id") or "").strip() or None
+        client_id = str(body.get("client_id") or "").strip() or None
+        revoke_all = bool(body.get("revoke_all", not (delegation_id or grant_id or client_id)))
+        reason = str(body.get("reason") or "revoked_by_local_owner")
+
+        rev_res = app.state.oauth_persistence.revoke_owner_access(
+            delegation_id=delegation_id,
+            grant_id=grant_id,
+            client_id=client_id,
+            revoke_all=revoke_all,
+            reason=reason,
+        )
+        app.state.revoked_oauth_tokens = app.state.oauth_persistence.load_active_revocations()
+        gw_ref = getattr(app.state, "gateway", None)
+        if gw_ref is not None:
+            gw_ref._revoked_oauth_tokens = app.state.revoked_oauth_tokens
+            if revoke_all and getattr(gw_ref, "policy", None) is not None and hasattr(gw_ref.policy, "sessions"):
+                try:
+                    gw_ref.policy.sessions.revoke_all(reason=reason)
+                except Exception:
+                    pass
+        _audit_grant_admin_event(
+            "oauth_owner_revoke",
+            "PERMIT",
+            f"Revoked owner access (revoke_all={revoke_all}, client_id={client_id}, delegation_id={delegation_id}, grant_id={grant_id})",
+            rev_res,
+        )
+        return JSONResponse(status_code=200, content={**rev_res, "owner_status": _compute_owner_status_snapshot()})
+
+    @app.post("/oauth/owner/emergency-stop")
+    async def oauth_owner_emergency_stop(request: Request) -> Response:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        admin_err = _require_loopback_owner_admin(request, body, "oauth_owner_emergency_stop")
+        if admin_err is not None:
+            return admin_err
+        reason = str(body.get("reason") or "owner_setup_center_emergency_stop")
+        gw_ref = getattr(app.state, "gateway", None)
+        info = await asyncio.to_thread(gw_ref.engage_emergency_stop, reason) if gw_ref is not None else {"emergency_stop": True}
+        return JSONResponse(status_code=200, content={"ok": True, **info, "owner_status": _compute_owner_status_snapshot()})
+
+    @app.post("/oauth/owner/emergency-stop/reset")
+    async def oauth_owner_emergency_stop_reset(request: Request) -> Response:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        admin_err = _require_loopback_owner_admin(request, body, "oauth_owner_emergency_stop_reset")
+        if admin_err is not None:
+            return admin_err
+        gw_ref = getattr(app.state, "gateway", None)
+        info = await asyncio.to_thread(gw_ref.reset_emergency_stop) if gw_ref is not None else {"emergency_stop": False}
+        return JSONResponse(status_code=200, content={"ok": True, **info, "owner_status": _compute_owner_status_snapshot()})
+
 
 def create_gateway_http_app(
     *,
@@ -4093,9 +5536,10 @@ def create_gateway_http_app(
             if provided_caller_token.startswith("mcp_oat_"):
                 oauth_ok, oauth_p, _ = _verify_oauth_token(
                     provided_caller_token,
-                    app.state.caller_auth_token,
+                    app.state.oauth_signing_key,
                     app.state.revoked_oauth_tokens,
                     persistence=getattr(app.state, "oauth_persistence", None),
+                    expected_owner_id=getattr(app.state, "expected_owner_id", "local_owner"),
                 )
                 if oauth_ok and oauth_p:
                     caller_authenticated = True
