@@ -3004,7 +3004,23 @@ def _handle_mcp_stream_session(
     req_id = payload.get("id") if isinstance(payload, dict) else None
 
     if is_init:
-        mcp_sess_id = f"sess_mcp_{secrets.token_hex(16)}"
+        if client_sess:
+            if client_sess in app.state.mcp_stream_sessions:
+                bound_id = app.state.mcp_stream_sessions[client_sess]
+                if bound_id != authenticated_identity:
+                    err_resp = _jsonrpc_auth_error_response(
+                        status_code=403,
+                        req_id=req_id,
+                        code=-32003,
+                        message="Forbidden (H04): Mcp-Session-Id header mismatch with authenticated caller identity",
+                    )
+                    return False, "", {}, err_resp
+            if re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", client_sess):
+                mcp_sess_id = client_sess
+            else:
+                mcp_sess_id = f"sess_mcp_{secrets.token_hex(16)}"
+        else:
+            mcp_sess_id = f"sess_mcp_{secrets.token_hex(16)}"
         app.state.mcp_stream_sessions[mcp_sess_id] = authenticated_identity
         resp_headers["Mcp-Session-Id"] = mcp_sess_id
         return True, mcp_sess_id, resp_headers, None

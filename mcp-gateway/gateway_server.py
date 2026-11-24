@@ -2145,7 +2145,10 @@ class MCPGatewayServer:
                         }}
 
             if server_owner_profile or is_owner_full_control or tool_name in OWNER_EXEC_AND_DESKTOP_TOOLS:
-                if tool_name in OWNER_CONTROL_AUTONOMOUS_TOOLS and (server_owner_profile or is_owner_full_control):
+                if tool_name in OWNER_CONTROL_AUTONOMOUS_TOOLS and (
+                    bool(self.policy and getattr(self.policy, "unrestricted_workspace_access", False))
+                    or is_owner_full_control
+                ):
                     # P0-7 Fix: Never allow agent_approve_task on cloud autonomous surface
                     if tool_name == "agent_approve_task":
                         return {
@@ -2163,7 +2166,7 @@ class MCPGatewayServer:
                             "jsonrpc": "2.0",
                             "id": req_id,
                             "result": {
-                                "content": [{"type": "text", "text": "Permission Denied (R2): Authenticated caller identity is required"}],
+                                "content": [{"type": "text", "text": "Permission Denied (G05/R2): Authenticated caller identity is required"}],
                                 "isError": True,
                             },
                         }
@@ -2174,7 +2177,7 @@ class MCPGatewayServer:
                             "jsonrpc": "2.0",
                             "id": req_id,
                             "result": {
-                                "content": [{"type": "text", "text": "Permission Denied (R2): Caller is not authorized for emergency stop"}],
+                                "content": [{"type": "text", "text": "Permission Denied (G05/R2): Caller is not authorized for emergency stop"}],
                                 "isError": True,
                             },
                         }
@@ -2185,7 +2188,7 @@ class MCPGatewayServer:
                             "jsonrpc": "2.0",
                             "id": req_id,
                             "result": {
-                                "content": [{"type": "text", "text": "Permission Denied (P0-7): Caller lacks owner or task-control authorization"}],
+                                "content": [{"type": "text", "text": "Permission Denied (G05/P0-7): Caller lacks owner or task-control authorization"}],
                                 "isError": True,
                             },
                         }
