@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1613,34 +1614,384 @@ class CodingToolHandler:
             raise PermissionError("Use agent_git_status or agent_git_diff")
         raise PermissionError("Command form is not an approved coding capability")
 
-    def _git(self, root, entry, name, args):
-        gitdir = root / ".git"
-        if not gitdir.is_dir() or _has_reparse_point_or_symlink(gitdir):
-            raise PermissionError("Git requires an ordinary .git directory at workspace root")
-        for relative in ("commondir", "objects/info/alternates", "objects/info/http-alternates"):
-            if (gitdir / relative).exists():
-                raise PermissionError("External Git object/worktree stores are denied")
+    @staticmethod
+    def _has_reparse_or_symlink_strict(path: Path, stop_at: Path | None = None) -> bool:
+        """Strictly detect symlinks and Windows NTFS junctions/reparse points even when targets are missing."""
+        if _has_reparse_point_or_symlink(path, stop_at=stop_at):
+            return True
+        try:
+            cur = path if path.is_absolute() else path.absolute()
+            resolved_stop = stop_at.resolve(strict=False) if stop_at else None
+            while True:
+                try:
+                    if cur.is_symlink():
+                        return True
+                    st = os.lstat(cur)
+                    if stat.S_ISLNK(st.st_mode):
+                        return True
+                    if getattr(st, "st_file_attributes", 0) & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT
+                        return True
+                except FileNotFoundError:
+                    pass
+                except (OSError, ValueError):
+                    return True
+                if resolved_stop and (cur == resolved_stop or cur.resolve(strict=False) == resolved_stop):
+                    break
+                parent = cur.parent
+                if parent == cur:
+                    break
+                cur = parent
+        except Exception:
+            return True
+        return False
+
+    @classmethod
+    def _walk_and_resolve_no_reparse(cls, base_dir: Path, raw_rel_or_abs: str) -> Path:
+        """Resolve a path step-by-step from base_dir while rejecting any intermediate symlink or NTFS junction."""
+        if not isinstance(raw_rel_or_abs, str) or not raw_rel_or_abs.strip():
+            raise PermissionError("Empty Git metadata path is denied")
+        cleaned = raw_rel_or_abs.strip()
+        if cleaned.startswith(("\\\\", "//")) or any(ord(c) < 32 for c in cleaned):
+            raise PermissionError("UNC, device, or control-character paths in Git metadata are denied")
+        tail = cleaned[2:] if re.match(r"^[A-Za-z]:", cleaned) else cleaned
+        if ":" in tail:
+            raise PermissionError("Alternate data streams or colons in Git metadata paths are denied")
+        raw_p = Path(cleaned)
+        if raw_p.is_absolute():
+            cur = Path(raw_p.anchor)
+            parts = raw_p.parts[1:]
+        else:
+            if cls._has_reparse_or_symlink_strict(base_dir):
+                raise PermissionError("Symlink or reparse-point paths are denied")
+            cur = base_dir.resolve(strict=False)
+            parts = raw_p.parts
+        for part in parts:
+            if not part or part == ".":
+                continue
+            if (part != ".." and part.endswith((" ", "."))) or _DEVICE.match(part):
+                raise PermissionError("Reserved or ambiguous component in Git metadata path is denied")
+            if part == "..":
+                if cls._has_reparse_or_symlink_strict(cur):
+                    raise PermissionError("Symlink or reparse-point traversal in Git metadata is denied")
+                parent = cur.parent
+                if parent == cur:
+                    raise PermissionError("Git metadata path traversal above drive root is denied")
+                cur = parent
+            else:
+                nxt = cur / part
+                if cls._has_reparse_or_symlink_strict(nxt, stop_at=cur):
+                    raise PermissionError("Symlink or NTFS junction in Git metadata path is denied")
+                cur = nxt
+        if cls._has_reparse_or_symlink_strict(cur):
+            raise PermissionError("Symlink or NTFS junction in Git metadata target is denied")
+        return cur.resolve(strict=False)
+
+    @staticmethod
+    def _read_single_line_git_pointer(file_path: Path, prefix: str = "") -> str:
+        """Read a single-line Git pointer file (.git, commondir, gitdir) rejecting hardlinks, binaries, and multiline payloads."""
+        if CodingToolHandler._has_reparse_or_symlink_strict(file_path):
+            raise PermissionError("Symlink or reparse-point Git pointer file is denied")
+        try:
+            st = os.lstat(file_path)
+        except OSError as exc:
+            raise PermissionError("Cannot stat Git pointer file") from exc
+        if not stat.S_ISREG(st.st_mode):
+            raise PermissionError("Git pointer must be a regular file")
+        if st.st_nlink > 1:
+            raise PermissionError("Hard-linked Git pointer file is denied")
+        if st.st_size <= 0 or st.st_size > 4096:
+            raise PermissionError("Git pointer file size is outside safe bounds")
+        raw = file_path.read_bytes()
+        if b"\x00" in raw:
+            raise PermissionError("NUL byte in Git pointer file is denied")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PermissionError("Git pointer file must be valid UTF-8") from exc
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        if len(lines) != 1:
+            raise PermissionError("Git pointer file must contain exactly one non-empty line")
+        line = lines[0].strip()
+        if prefix:
+            if not line.lower().startswith(prefix.lower()):
+                raise PermissionError(f"Git pointer file lacks required '{prefix}' header")
+            line = line[len(prefix):].strip()
+        if not line:
+            raise PermissionError("Git pointer target is empty")
+        return line
+
+    def _allowed_git_boundaries(self, root: Path, entry: dict) -> list[Path]:
+        """Collect all owner-approved workspace/repository boundaries for validating linked Git worktrees."""
+        boundaries: list[Path] = [root.resolve(strict=False)]
+        ws_raw = entry.get("workspace_root")
+        if isinstance(ws_raw, str) and ws_raw.strip():
+            try:
+                ws_p = Path(ws_raw).resolve(strict=False)
+                if ws_p not in boundaries:
+                    boundaries.append(ws_p)
+            except Exception:
+                pass
+        extra_common = entry.get("allowed_git_common_dirs")
+        if isinstance(extra_common, list):
+            for item in extra_common:
+                if isinstance(item, str) and item.strip():
+                    try:
+                        cp = self._raw_path(item.strip())
+                        if cp.is_absolute() and not self._has_reparse_or_symlink_strict(cp):
+                            rcp = cp.resolve(strict=False)
+                            if rcp not in boundaries:
+                                boundaries.append(rcp)
+                    except Exception:
+                        continue
+        policy = getattr(self.broker, "policy", None)
+        allowed_roots = getattr(policy, "allowed_roots", None)
+        if allowed_roots:
+            for ar in allowed_roots:
+                try:
+                    arp = Path(ar).resolve(strict=False)
+                    if not self._has_reparse_or_symlink_strict(arp) and arp not in boundaries:
+                        boundaries.append(arp)
+                except Exception:
+                    continue
+        if hasattr(self.broker, "list_preapproved_roots"):
+            try:
+                for pr in self.broker.list_preapproved_roots():
+                    prp = Path(pr).resolve(strict=False)
+                    if not self._has_reparse_or_symlink_strict(prp) and prp not in boundaries:
+                        boundaries.append(prp)
+            except Exception:
+                pass
+        caller = str(self._req_ctx().get("caller_id") or "")
+        for trusted_entry in self._entries():
+            if trusted_entry.get("owner_global_filesystem"):
+                continue
+            callers = trusted_entry.get("allowed_callers")
+            if callers is not None and caller and caller not in callers:
+                continue
+            tw = trusted_entry.get("workspace_root")
+            if isinstance(tw, str) and tw.strip():
+                try:
+                    twp = Path(tw).resolve(strict=False)
+                    if not self._has_reparse_or_symlink_strict(twp) and twp not in boundaries:
+                        boundaries.append(twp)
+                except Exception:
+                    continue
+        return boundaries
+
+    def _resolve_and_validate_git_dirs(self, root: Path, entry: dict) -> tuple[Path, Path]:
+        """Validate either a standard .git directory or a linked Git worktree .git file and return (gitdir, common_gitdir)."""
+        dot_git = root / ".git"
+        if self._has_reparse_or_symlink_strict(dot_git):
+            raise PermissionError("Git .git entry cannot be a symlink or NTFS reparse point")
+        try:
+            st = os.lstat(dot_git)
+        except OSError as exc:
+            raise PermissionError("Git requires an ordinary .git directory or verified worktree .git file at workspace root") from exc
+
+        if stat.S_ISDIR(st.st_mode):
+            gitdir = dot_git.resolve(strict=False)
+            common_gitdir = gitdir
+            for relative in ("commondir", "objects/info/alternates", "objects/info/http-alternates"):
+                rel_p = gitdir / relative
+                if rel_p.exists() or self._has_reparse_or_symlink_strict(rel_p, stop_at=gitdir):
+                    raise PermissionError("External Git object/worktree stores are denied")
+        elif stat.S_ISREG(st.st_mode):
+            raw_gitdir = self._read_single_line_git_pointer(dot_git, prefix="gitdir:")
+            gitdir = self._walk_and_resolve_no_reparse(root, raw_gitdir)
+            if not gitdir.is_dir():
+                raise PermissionError("Worktree gitdir target does not exist or is not a directory")
+
+            commondir_file = gitdir / "commondir"
+            if commondir_file.exists() or self._has_reparse_or_symlink_strict(commondir_file, stop_at=gitdir):
+                raw_commondir = self._read_single_line_git_pointer(commondir_file)
+                common_gitdir = self._walk_and_resolve_no_reparse(gitdir, raw_commondir)
+            else:
+                # If no commondir exists, gitdir must reside strictly inside workspace root
+                if not gitdir.is_relative_to(root):
+                    raise PermissionError("External Git directory without verified worktree commondir structure is denied")
+                common_gitdir = gitdir
+
+            if common_gitdir != gitdir:
+                # Enforce strict Git linked-worktree structural and bidirectional back-pointer invariants
+                if gitdir.parent.name.casefold() != "worktrees" or gitdir.parent.parent != common_gitdir:
+                    raise PermissionError("Worktree gitdir must reside directly under <common_gitdir>/worktrees/<name>")
+                backptr_file = gitdir / "gitdir"
+                if not backptr_file.exists() and not self._has_reparse_or_symlink_strict(backptr_file, stop_at=gitdir):
+                    raise PermissionError("Worktree admin directory is missing required gitdir back-pointer")
+                raw_backptr = self._read_single_line_git_pointer(backptr_file)
+                resolved_backptr = self._walk_and_resolve_no_reparse(gitdir, raw_backptr)
+                if resolved_backptr != dot_git.resolve(strict=False):
+                    raise PermissionError("Worktree gitdir back-pointer does not match workspace .git file")
+
+            if (common_gitdir / "commondir").exists() or self._has_reparse_or_symlink_strict(common_gitdir / "commondir", stop_at=common_gitdir):
+                raise PermissionError("Chained commondir indirection in common Git directory is denied")
+            if not (common_gitdir / "HEAD").is_file() or not (common_gitdir / "objects").is_dir() or not (common_gitdir / "refs").is_dir():
+                raise PermissionError("Worktree common Git directory is missing required Git metadata (HEAD/objects/refs)")
+
+            for base_g in (gitdir, common_gitdir):
+                for relative in ("objects/info/alternates", "objects/info/http-alternates"):
+                    rel_p = base_g / relative
+                    if rel_p.exists() or self._has_reparse_or_symlink_strict(rel_p, stop_at=base_g):
+                        raise PermissionError("External Git object alternates are denied")
+
+            common_repo_root = common_gitdir.parent if common_gitdir.name.casefold() == ".git" else common_gitdir
+            if common_repo_root.parent == common_repo_root:
+                raise PermissionError("Common Git repository cannot be a drive root")
+            if self._is_raw_secret_or_protected_state(common_repo_root) or _is_sensitive_path(common_repo_root):
+                raise PermissionError("Common Git repository path is sensitive or protected")
+
+            boundaries = self._allowed_git_boundaries(root, entry)
+            in_boundary = any(
+                (common_gitdir == b or common_gitdir.is_relative_to(b) or common_repo_root == b or common_repo_root.is_relative_to(b))
+                for b in boundaries
+            )
+            if not in_boundary:
+                raise PermissionError("Worktree common Git directory escapes approved workspace boundaries")
+        else:
+            raise PermissionError("Git requires an ordinary .git directory or verified worktree .git file at workspace root")
+
         scanned = 0
-        for parent, dirs, files in os.walk(gitdir, followlinks=False):
-            for child in (*dirs, *files):
-                scanned += 1
-                if scanned > 100000 or _has_reparse_point_or_symlink(Path(parent) / child, stop_at=gitdir):
-                    raise PermissionError("Git metadata is reparse-linked or exceeds inspection bounds")
+        inspect_roots = [gitdir] if common_gitdir == gitdir else [gitdir, common_gitdir]
+        for inspect_root in inspect_roots:
+            if self._has_reparse_or_symlink_strict(inspect_root):
+                raise PermissionError("Git metadata root contains a symlink or reparse point")
+            for critical_name in ("config", "config.worktree", "HEAD", "commondir", "gitdir", "index"):
+                crit_p = inspect_root / critical_name
+                if crit_p.exists() or self._has_reparse_or_symlink_strict(crit_p, stop_at=inspect_root):
+                    if self._has_reparse_or_symlink_strict(crit_p, stop_at=inspect_root):
+                        raise PermissionError("Git critical metadata file is a symlink or reparse point")
+                    if crit_p.is_file() and os.lstat(crit_p).st_nlink > 1:
+                        raise PermissionError("Hard-linked Git metadata file is denied")
+            for parent, dirs, files in os.walk(inspect_root, followlinks=False):
+                parent_p = Path(parent)
+                for child in (*dirs, *files):
+                    scanned += 1
+                    child_p = parent_p / child
+                    if scanned > 100000 or self._has_reparse_or_symlink_strict(child_p, stop_at=inspect_root):
+                        raise PermissionError("Git metadata is reparse-linked or exceeds inspection bounds")
+        return gitdir, common_gitdir
+
+    @staticmethod
+    def _is_forbidden_git_config_key(key: str) -> bool:
+        k = key.strip().casefold()
+        if not k:
+            return False
+        if k.startswith((
+            "include.",
+            "includeif.",
+            "filter.",
+            "credential.",
+            "diff.",
+            "difftool.",
+            "merge.",
+            "mergetool.",
+            "fsmonitor.",
+            "alias.",
+            "gpg.",
+            "man.",
+            "sequence.",
+        )):
+            return True
+        if k in (
+            "core.sshcommand",
+            "core.worktree",
+            "core.hookspath",
+            "core.fsmonitor",
+            "core.pager",
+            "core.editor",
+            "core.askpass",
+            "core.gitproxy",
+            "core.alternaterefscommand",
+            "core.attributesfile",
+            "core.excludesfile",
+        ):
+            return True
+        if k.startswith("remote.") and k.endswith((".uploadpack", ".receivepack", ".proxy", ".vcs")):
+            return True
+        if k.startswith("extensions.") and k not in ("extensions.worktreeconfig", "extensions.objectformat", "extensions.noop"):
+            return True
+        return False
+
+    def _inspect_git_config_files(self, executable: str, root: Path, gitdir: Path, common_gitdir: Path, base_argv: list[str]) -> None:
+        """Pre-scan raw config files for includes/drivers and inspect parsed config keys across local and worktree configs."""
+        candidate_configs: list[Path] = []
+        for cfg in (common_gitdir / "config", gitdir / "config", gitdir / "config.worktree"):
+            if self._has_reparse_or_symlink_strict(cfg):
+                raise PermissionError("Git config file cannot be a symlink or reparse point")
+            if cfg.exists():
+                resolved_cfg = cfg.resolve(strict=False)
+                if resolved_cfg not in candidate_configs:
+                    candidate_configs.append(resolved_cfg)
+
+        forbidden_raw_section = re.compile(
+            r"(?im)^\s*\[\s*(?:include(?:if)?|filter|credential|diff|difftool|merge|mergetool|alias|fsmonitor|gpg)(?:[\s\"'.\]]|$)"
+        )
+        forbidden_raw_directive = re.compile(
+            r"(?im)^\s*(?:hookspath|fsmonitor|sshcommand|worktree|pager|editor|askpass|gitproxy|alternaterefscommand|uploadpack|receivepack)\s*="
+        )
+
+        for cfg_path in candidate_configs:
+            st = os.lstat(cfg_path)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1 or st.st_size > 262_144:
+                raise PermissionError("Git config file failed regularity, hardlink, or size check")
+            raw_bytes = cfg_path.read_bytes()
+            if b"\x00" in raw_bytes:
+                raise PermissionError("NUL byte in Git config file is denied")
+            try:
+                raw_text = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise PermissionError("Git config file must be valid UTF-8") from exc
+            if forbidden_raw_section.search(raw_text) or forbidden_raw_directive.search(raw_text):
+                raise PermissionError("Repository executable drivers, hooks, or external includes are denied")
+
+            parsed = self._run(
+                [executable, "--no-pager", "config", "--file", str(cfg_path), "--no-includes", "--null", "--list"],
+                root,
+                15,
+                redact=False,
+            )
+            if parsed["returncode"] != 0 or parsed["truncated"]:
+                raise PermissionError("Cannot safely inspect repository configuration file")
+            for record in parsed["stdout"].split("\x00"):
+                if not record:
+                    continue
+                key = record.split("\n", 1)[0].casefold()
+                if self._is_forbidden_git_config_key(key):
+                    raise PermissionError("Repository executable drivers or external includes are denied")
+
+        local_cfg = self._run(base_argv + ["config", "--local", "--no-includes", "--null", "--list"], root, 15, redact=False)
+        if local_cfg["returncode"] != 0 or local_cfg["truncated"]:
+            raise PermissionError("Cannot safely inspect repository configuration")
+        for record in local_cfg["stdout"].split("\x00"):
+            if not record:
+                continue
+            key = record.split("\n", 1)[0].casefold()
+            if self._is_forbidden_git_config_key(key):
+                raise PermissionError("Repository executable drivers or external includes are denied")
+
+    def _git(self, root, entry, name, args):
+        gitdir, common_gitdir = self._resolve_and_validate_git_dirs(root, entry)
         executable = shutil.which("git", path=os.environ.get("PATH", ""))
         if not executable or Path(executable).resolve().is_relative_to(root):
             raise PermissionError("Trusted Git executable unavailable")
-        argv = [executable, "--no-pager", "--git-dir=" + str(gitdir), "--work-tree=" + str(root),
-                "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + str(self.backup_dir / "no-hooks"), "-c", "core.untrackedCache=false"]
+        no_hooks_dir = self.backup_dir / "no-hooks"
+        if self._has_reparse_or_symlink_strict(no_hooks_dir):
+            raise PermissionError("Disabled hooks path contains a reparse point")
+        argv = [
+            executable,
+            "--no-pager",
+            "--git-dir=" + str(gitdir),
+            "--work-tree=" + str(root),
+            "-c", "core.fsmonitor=false",
+            "-c", "core.hooksPath=" + str(no_hooks_dir),
+            "-c", "core.untrackedCache=false",
+            "-c", "core.symlinks=false",
+            "-c", "credential.helper=",
+        ]
         # Worktree conversion can invoke clean/process filters even with
         # --no-ext-diff. Reject executable/config-include drivers before any
         # status/diff operation; never expose the raw local config to callers.
-        config = self._run(argv + ["config", "--local", "--no-includes", "--null", "--list"], root, 15, redact=False)
-        if config["returncode"] != 0 or config["truncated"]:
-            raise PermissionError("Cannot safely inspect repository configuration")
-        for record in config["stdout"].split("\x00"):
-            key = record.split("\n", 1)[0].casefold()
-            if key.startswith(("include.", "includeif.", "filter.", "credential.", "diff.")) or key in ("core.sshcommand", "core.worktree"):
-                raise PermissionError("Repository executable drivers or external includes are denied")
+        self._inspect_git_config_files(executable, root, gitdir, common_gitdir, argv)
         if name == "agent_git_status":
             argv += ["status", "--porcelain=v1", "--untracked-files=normal"]
         else:
@@ -1723,7 +2074,7 @@ class CodingToolHandler:
         # Do not pass bearer/cloud credentials or Python/Git injection variables.
         safe_names = ("SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "PATH", "PATHEXT", "SYSTEMDRIVE")
         env = {key: os.environ[key] for key in safe_names if key in os.environ}
-        env.update({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONNOUSERSITE": "1", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0", "GIT_LITERAL_PATHSPECS": "1", "GIT_OPTIONAL_LOCKS": "0"})
+        env.update({"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONNOUSERSITE": "1", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_ATTR_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0", "GIT_LITERAL_PATHSPECS": "1", "GIT_OPTIONAL_LOCKS": "0"})
         proc = subprocess.Popen(argv, cwd=cwd, env=env, shell=False, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 creationflags=(0x4 | 0x200 | 0x08000000) if os.name == "nt" else 0,
