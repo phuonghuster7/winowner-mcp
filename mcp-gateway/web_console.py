@@ -186,6 +186,16 @@ def _load_secret_from_env_files() -> str | None:
     if dpapi_secret:
         return dpapi_secret
 
+    try:
+        from http_server import resolve_owner_admin_token_path
+        admin_key_path = resolve_owner_admin_token_path()
+        if admin_key_path.is_file():
+            admin_secret = admin_key_path.read_text(encoding="utf-8", errors="replace").strip()
+            if admin_secret:
+                return admin_secret
+    except Exception:
+        pass
+
     for env_key in ("MCP_AUTH_TOKEN", "MCP_AGENT_APPROVAL_TOKEN", "COMPUTER_API_TOKEN"):
         val = os.getenv(env_key, "").strip()
         if val:
@@ -968,12 +978,22 @@ CONSOLE_HTML_PAGE = """<!DOCTYPE html>
       try {
         const res = await apiCall('/console/api/proposals', 'GET');
         const container = document.getElementById('proposals-list');
-        container.innerHTML = '';
+        container.textContent = '';
         for (const p of res.proposals) {
           const div = document.createElement('div');
           div.className = 'proposal-item';
           const header = document.createElement('div');
-          header.innerHTML = '<strong>' + p.proposal_id + '</strong> — <code>' + p.tool_name + '</code> [' + p.tier + '] — Status: <strong>' + p.status + '</strong>';
+          const idStrong = document.createElement('strong');
+          idStrong.textContent = String(p.proposal_id || '');
+          const toolCode = document.createElement('code');
+          toolCode.textContent = String(p.tool_name || '');
+          const statusStrong = document.createElement('strong');
+          statusStrong.textContent = String(p.status || '');
+          header.appendChild(idStrong);
+          header.appendChild(document.createTextNode(' — '));
+          header.appendChild(toolCode);
+          header.appendChild(document.createTextNode(' [' + String(p.tier || '') + '] — Status: '));
+          header.appendChild(statusStrong);
           const pre = document.createElement('pre');
           pre.textContent = JSON.stringify({ arguments: p.arguments, preview: p.preview, result: p.execution_result, error: p.error_message }, null, 2);
           div.appendChild(header);
@@ -1098,6 +1118,12 @@ def create_web_console_app(
     max_concurrent_sessions: int = 5,
     task_store: Any | None = None,
     grant_broker: Any | None = None,
+    oauth_persistence: Any | None = None,
+    oauth_signing_key: str | None = None,
+    owner_admin_token: str | None = None,
+    db_path: str | Path | None = None,
+    adapter_port: int = 8768,
+    setup_action_hooks: dict[str, Any] | None = None,
 ) -> FastAPI:
     """Create the Mode B Owner-Controlled Web Agent Console ASGI application."""
     if gateway is not None:
@@ -3142,7 +3168,14 @@ def create_web_console_app(
         if gw and hasattr(gw, "policy") and getattr(gw.policy, "emergency_stop_file", None):
             emergency_file = Path(gw.policy.emergency_stop_file)
         else:
-            emergency_file = Path(__file__).resolve().parent.parent / "runtime" / "EMERGENCY_STOP"
+            env_estop = os.getenv("MCP_EMERGENCY_STOP_FILE") or os.getenv("WINDOWS_MCP_EMERGENCY_STOP_FILE")
+            state_root = os.getenv("MCP_STATE_ROOT")
+            if env_estop:
+                emergency_file = Path(env_estop)
+            elif state_root:
+                emergency_file = Path(state_root) / "EMERGENCY_STOP"
+            else:
+                emergency_file = Path(__file__).resolve().parent.parent / "runtime" / "EMERGENCY_STOP"
         emergency_file.parent.mkdir(parents=True, exist_ok=True)
         emergency_file.write_text(f"EMERGENCY STOP at {time.time()}\n", encoding="utf-8")
 
@@ -3173,6 +3206,20 @@ def create_web_console_app(
                 "cancelled_tasks_count": cancelled_count,
             },
         )
+
+    from setup_center import register_setup_center_routes  # noqa: E402
+
+    register_setup_center_routes(
+        app,
+        gw=gw,
+        authenticate_request=_authenticate_request,
+        oauth_persistence=oauth_persistence,
+        oauth_signing_key=oauth_signing_key,
+        owner_admin_token=owner_admin_token,
+        db_path=db_path,
+        adapter_port=adapter_port,
+        setup_action_hooks=setup_action_hooks,
+    )
 
     return app
 

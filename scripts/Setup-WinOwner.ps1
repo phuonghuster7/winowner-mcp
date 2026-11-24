@@ -12,6 +12,7 @@ param(
     [switch]$DryRun,
     [switch]$NoPythonInstall,
     [switch]$NoOpenGuide,
+    [switch]$OpenSetupCenter,
     [switch]$ReadOnly,
     [switch]$OwnerFullControl,
     [ValidateRange(1024, 65535)][int]$Port = 8768
@@ -27,12 +28,15 @@ $powershellExe = Join-Path $PSHOME "powershell.exe"
 function Write-SetupResult([string]$state, [string]$mode) {
     # No secrets or OAuth values are written to this human-readable summary.
     $resultPath = Join-Path $root "WinOwner-SETUP-RESULT.txt"
+    $stepState = if ($state -eq "LOCAL_INSTALL_PASS") { "LOCAL_READY" } else { "UNVERIFIED" }
     $lines = @(
         "WinOwner MCP v1.2.0",
         "Windows install status: $state",
+        "Four-step state: $stepState",
         "Local profile: $mode",
         "ChatGPT connected: NOT YET (connector None is possible with separately authenticated tunnel)",
         "Local MCP: http://127.0.0.1:$Port/mcp",
+        "WinOwner Setup Center: http://127.0.0.1:8767/setup",
         "Next steps (English): README.md",
         "Next steps (Vietnamese): README.vi.md",
         "This file contains no keys or authentication tokens."
@@ -103,9 +107,18 @@ try {
     }
     Write-Host ""
     Write-Host "LOCAL_INSTALL_PASS: protected owner profile ($profile) on http://127.0.0.1:$Port/mcp" -ForegroundColor Green
+    Write-Host "STATE: LOCAL_READY (Step 1 of 4 complete; ChatGPT connection NOT YET verified)." -ForegroundColor Cyan
     Write-Host "NEXT: ChatGPT connection is NOT active. See README.md (English) or README.vi.md (Vietnamese)." -ForegroundColor Yellow
     Write-Host "NEXT: Add your tunnel in ChatGPT Plugins. Authentication None needs secured backend; owner tools still need verified owner grants." -ForegroundColor Yellow
-    Write-Host "No additional windows are launched by this installer."
+    if ($OpenSetupCenter -and (-not $NoOpenGuide)) {
+        $pyw = Join-Path $root ".venv\Scripts\pythonw.exe"
+        $runner = Join-Path $root "scripts\Run-WinOwnerMcp.py"
+        if ((Test-Path -LiteralPath $pyw) -and (Test-Path -LiteralPath $runner)) {
+            Start-Process -FilePath $pyw -ArgumentList @("-u", ('"{0}"' -f $runner), "--port", "$Port", "--profile", $profile, "--setup-center", "--open-browser") -WorkingDirectory $root -WindowStyle Hidden
+        }
+    } else {
+        Write-Host "No additional windows are launched by this installer."
+    }
     Write-SetupResult "LOCAL_INSTALL_PASS" $profile
     exit 0
 } catch {
