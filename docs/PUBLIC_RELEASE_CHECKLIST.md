@@ -15,7 +15,8 @@
 - Secret-scan **all source and the entire public Git history**, including binary archives and Git LFS.
 - Manually review every hit involving tunnel identifiers, client IDs, host paths, authorization or private endpoint identifiers.
 - Confirm no active credential ever entered the snapshot; rotate any credential that was exposed in historical material before publication.
-- Verify non-owner denial, owner scope/revocation, path escapes, secrets masking, emergency stop and backup semantics.
+- Verify non-owner denial, verifiable OAuth 2.1 owner pairing challenge flow (single-use anti-replay, TTL expiry, refusal of `Authentication: None` escalation, zero manual `client_id` entry, zero token pasting), owner scope/revocation, linked Git worktree boundary checks, path escapes, secrets masking, emergency stop, transactional tunnel reconfiguration, and verified release update/rollback semantics.
+- Verify WinOwner Setup Center (`/setup`) and `Check-WinOwner.cmd` never display fake green states (`CHATGPT_CONNECTED` requires a real verified read-only MCP tool call; `Permissions` reflects exact backend effective authority).
 
 ## 3. Release and reproducibility
 

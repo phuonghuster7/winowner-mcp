@@ -22,12 +22,12 @@ WinOwner MCP connects your own Windows workstation to ChatGPT over an authentica
 
 | Feature | What it delivers |
 |---|---|
-| Windows-first onboarding | Single-command install (`go.ps1`) or extracted ZIP launcher (`Install-WinOwner.cmd`) with automated local health and auth verification |
-| Workspace & Git inspection | Inspect approved directories, read text files, and review `git status` or `git diff` |
+| Windows-first 4-step onboarding | Single-command install (`go.ps1`) or ZIP launcher (`Install-WinOwner.cmd`) plus **WinOwner Setup Center** (`/setup`) tracking `LOCAL_READY -> CHATGPT_CONNECTED -> OWNER_VERIFIED -> OWNER_CONTROL_READY` |
+| Workspace & Git inspection | Inspect approved directories (including verified linked Git worktrees), read text files, and review `git status` or `git diff` |
 | Scoped coding workflow | File modifications, test runs, and command execution only within explicitly authorized scopes |
-| Task lifecycle management | Background task status, logs, diffs, and artifacts; owner-verified pause, resume, cancel, and emergency stop |
-| Desktop capability boundary | Window observation, screenshots, and UI input strictly gated by owner identity, policy, and interactive session rules |
-| Connection lifecycle tools | Local diagnostics (`Check-WinOwner.cmd`), tunnel management (`Connect-ChatGPT.cmd`, `Disconnect-ChatGPT.cmd`), and clean uninstall |
+| Verifiable owner pairing | One-time cryptographic pairing challenge (`XXXX-XXXX`) reviewed and approved locally in Windows — zero manual OAuth `client_id` typing and zero owner token pasting into ChatGPT |
+| Task lifecycle & desktop boundary | Background task control, window observation, screenshots, and UI input strictly gated by verified owner identity, policy, and interactive session rules |
+| Lifecycle & recovery tools | WinOwner Setup Center UI, diagnostics (`Check-WinOwner.cmd`), transactional tunnel reconfiguration (`Connect-ChatGPT.cmd`), verified release updates, and clean uninstall |
 
 ## Architecture
 
@@ -65,7 +65,12 @@ Open Windows Command Prompt (**CMD**) when `v1.2.0` is published (or extract the
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
 
-By default, WinOwner installs into `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` in `read_only` mode, creates dependencies in an isolated `.venv`, registers a per-user Task Scheduler startup task, and verifies local `/health` and anonymous HTTP `401` enforcement (`LOCAL_INSTALL_PASS`).
+By default, WinOwner installs into `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` in `read_only` mode, creates dependencies in an isolated `.venv`, registers a per-user Task Scheduler startup task, and verifies local `/health` and anonymous HTTP `401` enforcement (`LOCAL_INSTALL_PASS` -> state `LOCAL_READY`). You can open the bilingual **WinOwner Setup Center** on loopback (`http://127.0.0.1:8767/setup`) via `Check-WinOwner.cmd -OpenSetupCenter` to manage all four onboarding stages without using a terminal:
+
+1. **Install (`LOCAL_READY`):** Local service is healthy on `127.0.0.1:8768` and rejects unauthenticated requests with HTTP `401`.
+2. **Connect (`CHATGPT_CONNECTED`):** Private tunnel is connected and ChatGPT completes a real verified read-only MCP tool call (never inferred from `/health` or `/readyz` alone).
+3. **One-Time Owner Review (`OWNER_VERIFIED`):** An OAuth 2.1 client requests a cryptographic pairing challenge (`XXXX-XXXX`) and the local Windows owner approves it in WinOwner Setup Center or `Grant-OwnerAccess.cmd` (no manual `client_id` typing, no token pasting).
+4. **Full Scoped/Owner Use (`OWNER_CONTROL_READY`):** Effective permissions (`Read`, `Scoped`, or `Owner`) match the intersection of server profile, verified client identity, active delegation/grant, and approved workspaces.
 
 ### Connect to ChatGPT
 
@@ -102,7 +107,7 @@ Next, run `Connect-ChatGPT.cmd` in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` and enter
 1. **Open the custom connector dialog:** click **Add > Add custom MCP server** on the ChatGPT Plugins page.
 2. **Enter plugin details:** enter `winowner-mcp` and an optional short description (e.g., `remote desktop`).
 3. **Select Tunnel & paste the ID:** switch **Connection** to **Tunnel** and paste your `Tunnel ID` from Step 2.
-4. **Authentication & confirmation:** select `No authentication` only when WinOwner enforces authentication and policy at its private tunnel and local backend (this never bypasses backend HTTP `401` checks or grants owner access). Read the trust warning, check **I understand and want to continue**, and click **Create as a plugin**. Keep initial access `read_only`.
+4. **Authentication & confirmation:** select `No authentication` only for **read-only (`Read`)** usage when WinOwner enforces authentication at its private tunnel and local backend. **Platform boundary:** `Authentication: None` over a shared tunnel does not supply a verifiable per-client identity to the host, so it is strictly capped at `read_only` (`Read`) and never grants owner access. For `Scoped` or `Owner` privileges, connect via OAuth 2.1 and approve the one-time pairing challenge locally. Read the trust warning, check **I understand and want to continue**, and click **Create as a plugin**. Keep initial access `read_only`.
 
 #### Step 4 · Plugin Permissions (optional)
 
@@ -120,13 +125,14 @@ This step is **optional and not required to connect**.
 
 ### Verify the connection
 
-| Check | Scope verified |
+| Check / State | Scope verified |
 |---|---|
-| `LOCAL_INSTALL_PASS` / `CHECK_PASS` | Local MCP service health and anonymous HTTP `401` blocking |
-| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Local `tunnel-client` task running and `/readyz` responding |
-| Successful read-only request in ChatGPT | End-to-end tool execution for that ChatGPT workspace and request |
+| `LOCAL_INSTALL_PASS` / `LOCAL_READY` | Local MCP service health and anonymous HTTP `401` blocking (`Local Service: Ready`) |
+| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Local `tunnel-client` task running and `/readyz` responding (`Tunnel: Connected`, ChatGPT still `Not Verified`) |
+| `CHATGPT_CONNECTED` | Real authenticated read-only MCP `tools/call` succeeded from ChatGPT (`ChatGPT: Verified`) |
+| `OWNER_VERIFIED` / `OWNER_CONTROL_READY` | Verifiable OAuth 2.1 owner pairing challenge approved locally (`Owner Identity: Verified`, `Permissions: Scoped` or `Owner`) |
 
-These three checks are independent. Confirm end-to-end connectivity with a harmless read-only request against an approved test workspace before enabling any write or owner capability.
+These checks are independent. Confirm end-to-end connectivity with a harmless read-only request against an approved test workspace before approving any write or owner capability in **WinOwner Setup Center**.
 
 ## Usage examples
 
@@ -180,10 +186,11 @@ WinOwner separates controls into three independent layers:
 
 Local management utilities in `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`:
 
-- `Check-WinOwner.cmd`: verify local service health, anonymous `401` enforcement, and local tunnel readiness.
-- `Disconnect-ChatGPT.cmd`: stop and unregister only the verified local tunnel task while leaving local install/auth intact.
-- `Uninstall-WinOwner.cmd`: stop and remove verified local service and tunnel tasks cleanly.
-- [Advanced owner administration (Vietnamese)](docs/ADVANCED_CHATGPT.vi.md): `Grant-OwnerAccess.cmd`, `Show-OwnerKey.cmd`, and `Revoke-OwnerAccess.cmd` are explicit administrative tools kept separate from initial setup.
+- **WinOwner Setup Center (`http://127.0.0.1:8767/setup`):** bilingual (VI/EN) local web control surface showing the live 6-row status table (`Local Service`, `Tunnel`, `ChatGPT`, `Owner Identity`, `Permissions`, `Version`) and 8 actions (`Install / Repair`, `Connect ChatGPT`, `Verify Connection`, `Review Owner Access`, `Revoke Access`, `Reconfigure Tunnel`, `Check for Updates`, `Uninstall`). Launch anytime with `Check-WinOwner.cmd -OpenSetupCenter`.
+- `Check-WinOwner.cmd`: verify local service health, anonymous `401` enforcement, local tunnel readiness, and the live 4-step state machine summary (`-Json` supported).
+- `Connect-ChatGPT.cmd` & `Disconnect-ChatGPT.cmd`: configure, transactionally reconfigure (`-Reconfigure` with pre-cutover validation and automatic rollback), or stop the verified local tunnel task.
+- `Uninstall-WinOwner.cmd`: stop and remove verified local service and tunnel tasks cleanly while preserving user secrets.
+- [Advanced owner administration (Vietnamese)](docs/ADVANCED_CHATGPT.vi.md): `Grant-OwnerAccess.cmd` (reviews and approves pending verifiable pairing challenges without manual `client_id` entry), `Show-OwnerKey.cmd` (displays non-secret pairing fingerprint status), and `Revoke-OwnerAccess.cmd` (revokes delegations, grants, and tokens cleanly).
 
 See [SECURITY.md](SECURITY.md), [docs/INSTALLATION.md](docs/INSTALLATION.md), and [docs/START_HERE.vi.md](docs/START_HERE.vi.md).
 

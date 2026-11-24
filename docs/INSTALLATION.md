@@ -31,7 +31,7 @@ Both the legacy bootstrap and the beginner installer default to read_only; Owner
 
 Run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Bootstrap-WindowsMcp.ps1 -DryRun` for a non-mutating check. Run with `-Remove` to stop the verified local adapter and unregister the auto-start task. Existing secrets and policies remain on disk for owner-controlled cleanup. Auto-start has been verified across separate command sessions, but a full Windows reboot remains a separate acceptance check.
 
-**LOCAL_INSTALL_PASS does NOT mean the ChatGPT connector is connected.** Connect the private tunnel using Connect-ChatGPT.cmd. Authentication None is valid at ChatGPT plugin creation when backend auth is configured. The local default is read_only; privileged tools require explicit owner verification and grants.
+**LOCAL_INSTALL_PASS (`LOCAL_READY`) does NOT mean the ChatGPT connector is connected.** Connect the private tunnel using **WinOwner Setup Center** (`http://127.0.0.1:8767/setup` via `Check-WinOwner.cmd -OpenSetupCenter`) or `Connect-ChatGPT.cmd`. `Authentication: None` is valid at ChatGPT plugin creation for read-only (`Read`) usage when backend tunnel auth is configured, whereas privileged `Scoped` or `Owner` tools require OAuth 2.1 verifiable client identity and one-time local challenge approval (`OWNER_VERIFIED -> OWNER_CONTROL_READY`).
 
 ## Verify installer before modifying your workstation
 
@@ -64,9 +64,9 @@ private credentials or reauthorize ChatGPT. Keep the previous folder until both 
 new local service and your actual ChatGPT connection work. Rerunning the same
 version repairs that installation instead of overwriting configuration. A separately
 obtained trusted archive SHA-256 can be supplied as ExpectedArchiveSha256 when running
-go.ps1; a tag and HTTPS alone are not an independent integrity check. A rollback is
-reported as verified only after the old local service passes health and authentication
-checks. Remote pairing remains a separate check.
+go.ps1; a tag and HTTPS alone are not an independent integrity check.
+
+In-place updates via `scripts/Update-WindowsMcpAgent.ps1` (or **Check for Updates** in WinOwner Setup Center) strictly require verified semantic-version GitHub Release artifacts (`-ReleaseVersion vX.Y.Z` or verified `-ReleaseZipPath` + SHA-256 sums and `release-manifest.json`), reject arbitrary branch refs (`main`/`HEAD`), verify Scheduled Task ownership, and verify before/after SHA-256 preservation of local secrets, OAuth databases, and policies. Two-phase atomic rollback (`scripts/Rollback-WindowsMcp.ps1`) verifies 100% of backup file hashes before restoring and removes any newly added files. A rollback is reported as verified only after the old local service passes health and authentication checks. Remote pairing remains a separate check.
 
 ## Maintainer release alignment
 

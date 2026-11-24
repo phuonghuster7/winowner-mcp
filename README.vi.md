@@ -22,12 +22,12 @@ WinOwner MCP kết nối máy Windows của chính bạn với ChatGPT thông qu
 
 | Tính năng | Lợi ích mang lại |
 |---|---|
-| Cài đặt chuẩn Windows | Một lệnh cài (`go.ps1`) hoặc giải nén ZIP (`Install-WinOwner.cmd`), tự động kiểm tra dịch vụ và xác thực cục bộ |
-| Kiểm tra workspace & Git | Đọc thư mục được cấp phép, xem tệp văn bản, kiểm tra `git status` và `git diff` |
-| Quy trình lập trình có phạm vi | Chỉnh sửa tệp, chạy kiểm thử và lệnh trong phạm vi đã được phê duyệt rõ ràng |
-| Quản lý vòng đời tác vụ | Xem trạng thái, nhật ký, diff, artifact; tạm dừng, tiếp tục, hủy và dừng khẩn cấp khi có xác thực owner |
-| Ranh giới thao tác Desktop | Quan sát màn hình, chụp ảnh, thao tác chuột/phím bị giới hạn nghiêm ngặt theo danh tính owner, chính sách và phiên Windows |
-| Tiện ích vòng đời kết nối | Tự chẩn đoán (`Check-WinOwner.cmd`), cấu hình/ngắt tunnel (`Connect-ChatGPT.cmd`, `Disconnect-ChatGPT.cmd`) và gỡ cài đặt sạch |
+| Hành trình 4 bước chuẩn Windows | Một lệnh cài (`go.ps1`) hoặc giải nén ZIP (`Install-WinOwner.cmd`) kèm **WinOwner Setup Center** (`/setup`) theo dõi thực tế `LOCAL_READY -> CHATGPT_CONNECTED -> OWNER_VERIFIED -> OWNER_CONTROL_READY` |
+| Kiểm tra workspace & Git | Đọc thư mục được cấp phép (hỗ trợ cả Git worktree hợp lệ), xem tệp văn bản, kiểm tra `git status` và `git diff` |
+| Quy trình lập trình có phạm vi | Chỉnh sửa tệp, chạy kiểm thử và lệnh chỉ trong phạm vi đã được phê duyệt rõ ràng |
+| Ghép nối chủ máy có xác minh | Xác nhận một lần qua mã thử thách (`XXXX-XXXX`) ngay trên máy Windows — không cần tự tìm/nhập `client_id` và không dán owner token vào ChatGPT |
+| Quản lý tác vụ & ranh giới Desktop | Điều phối tác vụ nền, quan sát màn hình, chụp ảnh, thao tác chuột/phím bị giới hạn nghiêm ngặt theo danh tính owner đã xác minh, chính sách và phiên Windows |
+| Tiện ích vòng đời & khôi phục | Giao diện WinOwner Setup Center, tự chẩn đoán (`Check-WinOwner.cmd`), cấu hình lại tunnel an toàn (`Connect-ChatGPT.cmd`), cập nhật bản phát hành có xác minh SHA-256 và gỡ cài đặt sạch |
 
 ## Kiến trúc
 
@@ -65,7 +65,12 @@ Mở Command Prompt (**CMD**) trên Windows khi `v1.2.0` đã phát hành (hoặ
 powershell -NoP -C "irm https://github.com/phuonghuster7/winowner-mcp/raw/v1.2.0/go.ps1|iex"
 ```
 
-Mặc định, WinOwner cài đặt vào `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` ở chế độ `read_only`, tạo môi trường `.venv` riêng, đăng ký tác vụ Task Scheduler theo người dùng hiện tại, rồi tự kiểm tra `/health` và chặn truy cập ẩn danh HTTP `401` (`LOCAL_INSTALL_PASS`).
+Mặc định, WinOwner cài đặt vào `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` ở chế độ `read_only`, tạo môi trường `.venv` riêng, đăng ký tác vụ Task Scheduler theo người dùng hiện tại, rồi tự kiểm tra `/health` và chặn truy cập ẩn danh HTTP `401` (`LOCAL_INSTALL_PASS` -> trạng thái `LOCAL_READY`). Bạn có thể mở **WinOwner Setup Center** song ngữ Việt/Anh (`http://127.0.0.1:8767/setup`) qua `Check-WinOwner.cmd -OpenSetupCenter` để thực hiện trọn vẹn hành trình 4 bước mà không cần dùng dòng lệnh:
+
+1. **Cài đặt (`LOCAL_READY`):** Dịch vụ cục bộ chạy ổn định trên `127.0.0.1:8768` và chặn mọi truy cập ẩn danh bằng HTTP `401`.
+2. **Kết nối (`CHATGPT_CONNECTED`):** Tunnel riêng đã kết nối và ChatGPT gọi thành công một công cụ đọc thật (không bao giờ báo xanh giả chỉ từ `/health` hay `/readyz`).
+3. **Xác nhận một lần (`OWNER_VERIFIED`):** Client ChatGPT OAuth 2.1 gửi yêu cầu ghép nối kèm mã xác nhận (`XXXX-XXXX`), chủ máy kiểm tra và bấm **Phê duyệt (Approve)** trong WinOwner Setup Center hoặc `Grant-OwnerAccess.cmd` (không nhập `client_id` thủ công, không dán owner token vào khung chat).
+4. **Sử dụng đầy đủ tính năng (`OWNER_CONTROL_READY`):** Quyền hạn thực tế (`Read`, `Scoped`, hoặc `Owner`) phản ánh chính xác giao điểm giữa cấu hình dịch vụ, danh tính client đã xác minh, delegation/grant còn hạn và workspace được duyệt.
 
 ### Kết nối ChatGPT
 
@@ -102,7 +107,7 @@ Tiếp theo, chạy `Connect-ChatGPT.cmd` trong `%LOCALAPPDATA%\WinOwnerMCP\v1.2
 1. **Mở hộp thoại thêm MCP:** vào mục Plugins trên ChatGPT, bấm **Add > Add custom MCP server**.
 2. **Nhập tên plugin:** điền `winowner-mcp` và mô tả ngắn nếu cần (ví dụ `remote desktop`).
 3. **Chọn Tunnel và dán ID:** chuyển **Connection** sang **Tunnel** rồi dán `Tunnel ID` đã tạo ở Bước 2.
-4. **Chọn Authentication và tạo plugin:** chỉ chọn `No authentication` khi WinOwner đã bảo vệ tầng tunnel riêng và backend cục bộ (tùy chọn này không bỏ qua kiểm tra HTTP `401` phía máy và không cấp quyền owner). Đọc cảnh báo rủi ro, đánh dấu xác nhận và bấm **Create as a plugin**. Giữ quyền ban đầu ở mức `read_only`.
+4. **Chọn Authentication và tạo plugin:** chỉ chọn `No authentication` cho nhu cầu **chỉ đọc (`Read`)** khi WinOwner đã bảo vệ tầng tunnel riêng và backend cục bộ. **Giới hạn nền tảng:** `Authentication: None` qua tunnel dùng chung không gửi danh tính từng client có thể xác minh xuống máy Windows, nên luôn bị giới hạn nghiêm ngặt ở mức `read_only` (`Read`) và không thể nâng lên quyền chủ máy. Để sử dụng quyền `Scoped` hoặc `Owner`, hãy kết nối qua OAuth 2.1 và phê duyệt yêu cầu ghép nối một lần trên máy. Đọc cảnh báo rủi ro, đánh dấu xác nhận và bấm **Create as a plugin**. Giữ quyền ban đầu ở mức `read_only`.
 
 #### Bước 4 · Quyền Plugin (tùy chọn)
 
@@ -120,13 +125,14 @@ Bước này là **tùy chọn và không bắt buộc để kết nối**.
 
 ### Kiểm tra kết nối
 
-| Kết quả | Phạm vi đã xác minh |
+| Kết quả / Trạng thái | Phạm vi đã xác minh |
 |---|---|
-| `LOCAL_INSTALL_PASS` / `CHECK_PASS` | Dịch vụ MCP cục bộ chạy ổn định và chặn ẩn danh HTTP `401` |
-| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Tác vụ `tunnel-client` cục bộ đang chạy và `/readyz` phản hồi sẵn sàng |
-| ChatGPT gọi thành công tác vụ đọc thử | Xác nhận thực thi đầu-cuối cho workspace ChatGPT và yêu cầu cụ thể đó |
+| `LOCAL_INSTALL_PASS` / `LOCAL_READY` | Dịch vụ MCP cục bộ chạy ổn định và chặn ẩn danh HTTP `401` (`Local Service: Ready`) |
+| `TUNNEL_SETUP_PASS` / `TUNNEL_READY` | Tác vụ `tunnel-client` cục bộ đang chạy và `/readyz` phản hồi sẵn sàng (`Tunnel: Connected`, ChatGPT vẫn `Not Verified`) |
+| `CHATGPT_CONNECTED` | ChatGPT gọi thành công công cụ chỉ đọc thật qua MCP (`ChatGPT: Verified`) |
+| `OWNER_VERIFIED` / `OWNER_CONTROL_READY` | Đã phê duyệt yêu cầu ghép nối chủ máy OAuth 2.1 có xác minh trên máy (`Owner Identity: Verified`, `Permissions: Scoped` hoặc `Owner`) |
 
-Ba mức kiểm tra này độc lập với nhau. Luôn kiểm thử bằng tác vụ chỉ đọc an toàn trên workspace kiểm thử trước khi cấp thêm quyền ghi hoặc quyền owner.
+Các mức kiểm tra này độc lập với nhau. Luôn kiểm thử bằng tác vụ chỉ đọc an toàn trên workspace kiểm thử trước khi phê duyệt quyền ghi hoặc quyền owner trong **WinOwner Setup Center**.
 
 ## Ví dụ sử dụng
 
@@ -180,10 +186,11 @@ WinOwner tách biệt cơ chế bảo vệ thành 3 lớp kiểm tra độc lậ
 
 Các tiện ích quản trị cục bộ trong `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0`:
 
-- `Check-WinOwner.cmd`: kiểm tra dịch vụ cục bộ, chặn ẩn danh HTTP `401` và trạng thái sẵn sàng của tunnel.
-- `Disconnect-ChatGPT.cmd`: dừng và gỡ tác vụ tunnel cục bộ đã xác minh nhưng vẫn giữ nguyên dịch vụ và cấu hình cài đặt.
-- `Uninstall-WinOwner.cmd`: dừng và gỡ sạch dịch vụ MCP cùng tác vụ tunnel đã xác minh.
-- [Quản trị nâng cao](docs/ADVANCED_CHATGPT.vi.md): `Grant-OwnerAccess.cmd`, `Show-OwnerKey.cmd` và `Revoke-OwnerAccess.cmd` là các công cụ quản trị riêng cho chủ máy, tách khỏi bước cài đặt ban đầu.
+- **WinOwner Setup Center (`http://127.0.0.1:8767/setup`):** trung tâm thiết lập song ngữ Việt/Anh hiển thị bảng trạng thái 6 hàng trực tiếp (`Local Service`, `Tunnel`, `ChatGPT`, `Owner Identity`, `Permissions`, `Version`) và 8 thao tác (`Cài đặt / Sửa chữa`, `Kết nối ChatGPT`, `Xác minh kết nối`, `Duyệt quyền Chủ máy`, `Thu hồi quyền`, `Cấu hình lại Tunnel`, `Kiểm tra cập nhật`, `Gỡ cài đặt`). Mở nhanh bằng `Check-WinOwner.cmd -OpenSetupCenter`.
+- `Check-WinOwner.cmd`: kiểm tra dịch vụ cục bộ, chặn ẩn danh HTTP `401`, trạng thái sẵn sàng của tunnel và bảng trạng thái 4 bước (`-Json`).
+- `Connect-ChatGPT.cmd` & `Disconnect-ChatGPT.cmd`: kết nối, cấu hình lại tunnel an toàn (`-Reconfigure` có sao lưu, kiểm tra trước khi chuyển và tự động rollback nếu lỗi) hoặc ngắt tác vụ tunnel cục bộ đã xác minh.
+- `Uninstall-WinOwner.cmd`: dừng và gỡ sạch dịch vụ MCP cùng tác vụ tunnel đã xác minh, giữ an toàn dữ liệu và khóa riêng.
+- [Quản trị nâng cao](docs/ADVANCED_CHATGPT.vi.md): `Grant-OwnerAccess.cmd` (duyệt yêu cầu ghép nối chủ máy có xác minh mà không cần nhập `client_id` thủ công), `Show-OwnerKey.cmd` (hiển thị tóm tắt trạng thái ghép nối không lộ khóa) và `Revoke-OwnerAccess.cmd` (thu hồi sạch delegation, grant và token).
 
 Xem thêm [SECURITY.md](SECURITY.md), [docs/INSTALLATION.md](docs/INSTALLATION.md) và [docs/START_HERE.vi.md](docs/START_HERE.vi.md).
 

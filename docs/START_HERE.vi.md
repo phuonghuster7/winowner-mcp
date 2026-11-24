@@ -30,34 +30,36 @@ flowchart LR
 
 Hai giá trị này có mục đích khác nhau; không phải hai API key. Tiện ích hiện có là `Connect-ChatGPT.cmd`. Không chia sẻ khóa hoặc ảnh màn hình chứa khóa.
 
-## 3. Plugin ChatGPT
+## 3. Plugin ChatGPT & WinOwner Setup Center
 
-Xem [hướng dẫn thêm custom MCP server của OpenAI](https://developers.openai.com/api/docs/guides/custom-mcp-server). Kiểm tra thông tin plugin và quyền truy cập được yêu cầu. Giữ chế độ chỉ đọc để nghiệm thu.
+Xem [hướng dẫn thêm custom MCP server của OpenAI](https://developers.openai.com/api/docs/guides/custom-mcp-server). Kiểm tra thông tin plugin và quyền truy cập được yêu cầu. Giữ chế độ chỉ đọc (`read_only`) để nghiệm thu bước đầu.
 
-Authentication None không có nghĩa là bỏ xác thực phía máy; HTTP 401 có thể xuất hiện khi chưa được cấp quyền. Ghép nối owner qua OAuth là luồng riêng, chưa nghiệm thu thực tế.
+Authentication None không có nghĩa là bỏ xác thực phía máy; HTTP 401 có thể xuất hiện khi chưa được cấp quyền. Vì `Authentication: None` qua tunnel không mang danh tính client riêng nên luôn giới hạn ở chế độ chỉ đọc (`Read`). Để nâng lên quyền chủ máy (`Scoped` / `Owner`), cần ghép nối OAuth 2.1 có xác minh và phê duyệt một lần ngay trong **WinOwner Setup Center** (`http://127.0.0.1:8767/setup`) hoặc `Grant-OwnerAccess.cmd` (không cần nhập `client_id` thủ công, không dán owner token vào ChatGPT).
 
 ## 4. Quyền plugin (tùy chọn)
 
 `Allow all tools` giảm yêu cầu xác nhận nhưng tăng rủi ro, không cấp quyền owner và không bắt buộc để kết nối. Giữ xác nhận cho thao tác nhạy cảm.
 
-## 5. Kiểm tra kết nối
+## 5. Hành trình 4 bước & Kiểm tra kết nối
 
-| Kết quả | Ý nghĩa |
+| Bước / Kết quả | Ý nghĩa xác minh thực tế |
 |---|---|
-| LOCAL_INSTALL_PASS / CHECK_PASS | Dịch vụ và xác thực cục bộ |
-| TUNNEL_SETUP_PASS / TUNNEL_READY | Tunnel sẵn sàng tại máy |
-| ChatGPT trả kết quả từ tác vụ đọc thử | Kết nối được kiểm tra thực tế |
+| `LOCAL_READY` (`LOCAL_INSTALL_PASS` / `CHECK_PASS`) | Dịch vụ và chặn ẩn danh HTTP 401 cục bộ sẵn sàng |
+| `TUNNEL_READY` (`TUNNEL_SETUP_PASS`) | Tunnel sẵn sàng tại máy (chưa tính là đã nối ChatGPT) |
+| `CHATGPT_CONNECTED` | ChatGPT gọi thành công công cụ chỉ đọc thật |
+| `OWNER_VERIFIED` -> `OWNER_CONTROL_READY` | Chủ máy phê duyệt yêu cầu ghép nối OAuth 2.1 một lần trên máy |
 
 ```mermaid
 flowchart LR
-  A["Máy sẵn sàng"] --> B["Tunnel sẵn sàng"]
-  B --> C["ChatGPT gọi tác vụ đọc"]
+  A["1. Cài đặt<br/>LOCAL_READY"] --> B["2. Kết nối<br/>CHATGPT_CONNECTED"]
+  B --> C["3. Xác nhận một lần<br/>OWNER_VERIFIED"]
+  C --> D["4. Sử dụng đầy đủ<br/>OWNER_CONTROL_READY"]
 ```
 
 ## Xử lý sự cố và ngắt kết nối
 
-Chỉ khi cần kiểm tra lỗi dịch vụ: nhấn **Win + R**, mở `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` rồi dùng `Check-WinOwner.cmd`.
+Nhấn **Win + R**, mở `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` rồi dùng `Check-WinOwner.cmd` (hoặc `Check-WinOwner.cmd -OpenSetupCenter` để mở giao diện Setup Center).
 
-`Disconnect-ChatGPT.cmd` ngắt tunnel cục bộ; `Uninstall-WinOwner.cmd` dừng và gỡ dịch vụ đã xác minh. Thu hồi quyền từ tài khoản riêng khi cần. Không tự chuyển Full Control chỉ để sửa lỗi kết nối.
+`Disconnect-ChatGPT.cmd` ngắt tunnel cục bộ; `Uninstall-WinOwner.cmd` dừng và gỡ dịch vụ đã xác minh. Thu hồi quyền bất cứ lúc nào trong Setup Center hoặc `Revoke-OwnerAccess.cmd`. Không tự chuyển Full Control chỉ để sửa lỗi kết nối.
 
 [Tài liệu kỹ thuật](ADVANCED_CHATGPT.vi.md) · [Sửa lỗi](TROUBLESHOOTING.md) · [Bảo mật](../SECURITY.md)
