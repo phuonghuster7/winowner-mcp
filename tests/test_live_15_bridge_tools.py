@@ -1,7 +1,7 @@
 """Live End-to-End Verification of all 15 Bridge v0.2.1 Read-Only Tools over MCP Streamable HTTP.
 
-Connects to the LIVE MCP Bridge at http://127.0.0.1:8765/mcp via MCP Streamable HTTP
-(`initialize`, `tools/list`, and `tools/call`) and independently executes all 15 tools:
+Connects to the MCP Bridge via MCP Streamable HTTP (`initialize`, `tools/list`, and `tools/call`)
+and independently executes all 15 tools:
   1. get_roots
   2. list_directory
   3. list_tree
@@ -18,35 +18,43 @@ Connects to the LIVE MCP Bridge at http://127.0.0.1:8765/mcp via MCP Streamable 
   14. git_diff
   15. git_log
 
-Verifies:
-  - Valid MCP `initialize` handshake (`protocolVersion`, `serverInfo.name`, `serverInfo.version`).
-  - Valid JSON schemas and non-empty descriptions for all 15 tools.
-  - Strictly 15 tools exposed: zero hidden shell/write/desktop tools, and no stale 8-tool snapshot.
-  - Direct rejection (`isError=True`) of unapproved write/shell calls on port 8765.
-  - Independent PASS/FAIL result and latency (ms) for each of the 15 tools.
-  - Saves detailed JSON report to `D:\\ProjectsWindows-MCP-Agent\\runtime\\logs\\live_15_tools_report.json`.
+By default (when WINOWNER_LIVE_PROD_PORTS != '1'), launches a real isolated uvicorn HTTP server
+on an ephemeral loopback port so production ports 8765-8768 are never touched.
 """
 from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
 import time
 from typing import Any
 import unittest
 import urllib.request
 
+import uvicorn
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+for _d in (PROJECT_ROOT / "mcp-gateway", PROJECT_ROOT / "backend", PROJECT_ROOT / "desktop-agent"):
+    if str(_d) not in sys.path:
+        sys.path.insert(0, str(_d))
+
+from gateway_server import MCPGatewayServer  # noqa: E402
+from http_server import create_gateway_http_app  # noqa: E402
+from policy import SecurityPolicy  # noqa: E402
+
 MCP_BRIDGE_URL = "http://127.0.0.1:8765/mcp"
-PROJECT_ROOT = Path(r"D:\ExampleProjects\Windows-MCP-Agent")
-REPORT_PATH = PROJECT_ROOT / "runtime" / "evidence" / "live_15_tools_report.json"
-POLICY_JSON_PATH = str(PROJECT_ROOT / "config" / "policy.json")
+REPORT_PATH = Path(tempfile.gettempdir()) / "winowner_live_15_tools_report.json"
+POLICY_JSON_PATH = str(PROJECT_ROOT / "config" / "policy.example.json")
 CONFIG_DIR_PATH = str(PROJECT_ROOT / "config")
-GIT_REPO_CANDIDATES = (
-    Path(r"C:\Users\ExampleUser\Desktop\computer-mcp-plugin-candidate"),
-    Path(r"C:\Users\ExampleUser\Desktop"),
-    PROJECT_ROOT,
-)
+GIT_REPO_CANDIDATES = (PROJECT_ROOT,)
 
 EXPECTED_15_TOOLS: tuple[str, ...] = (
     "get_roots",
@@ -98,14 +106,33 @@ FORBIDDEN_WRITE_EXEC_TOOLS: tuple[str, ...] = (
 )
 
 
+def _allocate_ephemeral_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def _wait_http_ready(url: str, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1.0) as resp:
+                if resp.status == 200:
+                    return
+        except Exception:
+            time.sleep(0.05)
+    raise RuntimeError(f"Isolated bridge HTTP server did not become ready at {url}")
+
+
 def call_mcp_streamable_http(
     method: str,
     params: dict[str, Any] | None = None,
     req_id: int = 1,
-    url: str = MCP_BRIDGE_URL,
+    url: str | None = None,
     timeout: float = 15.0,
 ) -> tuple[dict[str, Any], float]:
     """Send an MCP JSON-RPC 2.0 request over Streamable HTTP and return (response_dict, latency_ms)."""
+    target_url = url or MCP_BRIDGE_URL
     payload = {
         "jsonrpc": "2.0",
         "id": req_id,
@@ -114,7 +141,7 @@ def call_mcp_streamable_http(
     }
     body_bytes = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        url,
+        target_url,
         data=body_bytes,
         headers={
             "Content-Type": "application/json",
@@ -139,7 +166,7 @@ def call_mcp_streamable_http(
 
 
 def resolve_test_git_repo() -> str:
-    """Select an existing Git repository allowed by the live MCP Bridge."""
+    """Select an existing Git repository allowed by the MCP Bridge."""
     for candidate in GIT_REPO_CANDIDATES:
         if (candidate / ".git").exists():
             return str(candidate)
@@ -149,6 +176,7 @@ def resolve_test_git_repo() -> str:
 def run_live_15_tools_suite() -> dict[str, Any]:
     """Execute the full live 15-tool verification suite and save the JSON report."""
     git_repo_dir = resolve_test_git_repo()
+    drive_root = str(Path(PROJECT_ROOT.anchor))
 
     # 1. MCP initialize handshake
     init_resp, init_latency_ms = call_mcp_streamable_http(
@@ -244,7 +272,7 @@ def run_live_15_tools_suite() -> dict[str, Any]:
         ("search_files", {"root": CONFIG_DIR_PATH, "pattern": "*.json", "recursive": True, "max_results": 10}),
         ("search_code", {"cwd": CONFIG_DIR_PATH, "pattern": "read_only", "file_glob": "*.json", "max_results": 10}),
         ("grep", {"root": CONFIG_DIR_PATH, "pattern": "read_only", "file_glob": "*.json", "max_results": 10}),
-        ("disk_usage", {"path": "D:\\"}),
+        ("disk_usage", {"path": drive_root}),
         ("path_exists", {"path": POLICY_JSON_PATH}),
         ("git_status", {"cwd": git_repo_dir}),
         ("git_diff", {"cwd": git_repo_dir, "staged": False}),
@@ -268,6 +296,16 @@ def run_live_15_tools_suite() -> dict[str, Any]:
             first_item = content_items[0]
             if tool_name == "get_file":
                 res_blob = first_item.get("resource", {}).get("blob") if isinstance(first_item, dict) else None
+                if not res_blob and isinstance(first_item, dict) and isinstance(first_item.get("text"), str):
+                    try:
+                        parsed_file = json.loads(first_item["text"])
+                        if isinstance(parsed_file, dict):
+                            res_blob = (
+                                (parsed_file.get("resource") or {}).get("blob")
+                                or parsed_file.get("data_base64")
+                            )
+                    except json.JSONDecodeError:
+                        res_blob = None
                 if isinstance(res_blob, str) and len(res_blob) > 0:
                     decoded = base64.b64decode(res_blob).decode("utf-8", errors="replace")
                     passed = "read_only" in decoded
@@ -342,11 +380,76 @@ def run_live_15_tools_suite() -> dict[str, Any]:
 
 
 class TestLive15BridgeTools(unittest.TestCase):
-    """Live E2E test suite verifying all 15 read-only tools on http://127.0.0.1:8765/mcp."""
+    """Live E2E test suite verifying all 15 read-only tools over MCP Streamable HTTP."""
+
+    _tmp_dir: tempfile.TemporaryDirectory[str] | None = None
+    _server: uvicorn.Server | None = None
+    _thread: threading.Thread | None = None
 
     @classmethod
     def setUpClass(cls) -> None:
+        global MCP_BRIDGE_URL, REPORT_PATH, POLICY_JSON_PATH, CONFIG_DIR_PATH, GIT_REPO_CANDIDATES
+        if os.environ.get("WINOWNER_LIVE_PROD_PORTS") != "1":
+            cls._tmp_dir = tempfile.TemporaryDirectory(prefix="live_15_bridge_isolated_")
+            base = Path(cls._tmp_dir.name).resolve()
+            cfg_dir = base / "config"
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            policy_data = json.loads((PROJECT_ROOT / "config" / "policy.example.json").read_text(encoding="utf-8"))
+            drive_anchor = str(Path(PROJECT_ROOT.anchor))
+            repo_dir = base / "git_repo"
+            repo_dir.mkdir(parents=True, exist_ok=True)
+
+            git_exe = shutil.which("git")
+            if git_exe:
+                subprocess.run([git_exe, "init", "-q"], cwd=str(repo_dir), check=False, capture_output=True)
+                subprocess.run([git_exe, "config", "user.email", "test@example.invalid"], cwd=str(repo_dir), check=False, capture_output=True)
+                subprocess.run([git_exe, "config", "user.name", "Test Owner"], cwd=str(repo_dir), check=False, capture_output=True)
+                (repo_dir / "README.md").write_text("# Bridge Test Repo\n", encoding="utf-8")
+                subprocess.run([git_exe, "add", "README.md"], cwd=str(repo_dir), check=False, capture_output=True)
+                subprocess.run([git_exe, "commit", "-q", "-m", "Initial commit"], cwd=str(repo_dir), check=False, capture_output=True)
+
+            policy_data["allowed_read_roots"] = [str(PROJECT_ROOT), str(base), drive_anchor]
+            policy_data["allowed_git_repos"] = [str(repo_dir), str(PROJECT_ROOT)]
+            policy_file = cfg_dir / "policy.json"
+            policy_file.write_text(json.dumps(policy_data, indent=2), encoding="utf-8")
+
+            POLICY_JSON_PATH = str(policy_file)
+            CONFIG_DIR_PATH = str(cfg_dir)
+            REPORT_PATH = base / "evidence" / "live_15_tools_report.json"
+            GIT_REPO_CANDIDATES = (repo_dir, PROJECT_ROOT)
+
+            port = _allocate_ephemeral_port()
+            pol = SecurityPolicy(
+                policy_path=policy_file,
+                profile="read_only",
+                audit_log_path=base / "bridge_audit.jsonl",
+            )
+            gw = MCPGatewayServer(policy=pol)
+            gw.server_version = "0.2.1"
+            app = create_gateway_http_app(
+                gateway=gw,
+                caller_auth_token="test_isolated_bridge15_token_1234567890",
+                db_path=base / "bridge15_oauth.db",
+            )
+            cls._server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+            cls._thread = threading.Thread(target=cls._server.run, daemon=True)
+            cls._thread.start()
+            MCP_BRIDGE_URL = f"http://127.0.0.1:{port}/mcp"
+            _wait_http_ready(f"http://127.0.0.1:{port}/health")
+
         cls.report = run_live_15_tools_suite()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if cls._server is not None:
+            cls._server.should_exit = True
+        if cls._thread is not None:
+            cls._thread.join(timeout=5.0)
+        cls._server = None
+        cls._thread = None
+        if cls._tmp_dir is not None:
+            cls._tmp_dir.cleanup()
+            cls._tmp_dir = None
 
     def test_01_mcp_initialize_handshake(self) -> None:
         init = self.report["initialize_handshake"]
@@ -388,15 +491,4 @@ class TestLive15BridgeTools(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    report_data = run_live_15_tools_suite()
-    print(
-        f"Live 15-Tool Verification Status: {report_data['overall_status']} "
-        f"({report_data['tools_summary']['passed']}/{report_data['tools_summary']['total']} tools passed)"
-    )
-    for item in report_data["tool_results"]:
-        print(
-            f"  [{item['status']}] #{item['index']:02d} {item['tool']:16s} "
-            f"({item['latency_ms']:6.2f} ms) -> {item['response_preview'][:90]}"
-        )
-    print(f"Saved report to: {REPORT_PATH}")
-    raise SystemExit(0 if report_data["overall_passed"] else 1)
+    unittest.main()
