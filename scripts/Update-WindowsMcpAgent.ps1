@@ -19,7 +19,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$TargetRoot = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }),
+    [string]$TargetRoot = "",
     [string]$SourcePath = "",
     [string]$ReleaseVersion = "",
     [string]$ReleaseZipPath = "",
@@ -39,6 +39,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+$defaultRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+if ([string]::IsNullOrWhiteSpace($TargetRoot)) {
+    $TargetRoot = $defaultRoot
+}
 
 function Get-PortableFileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -290,7 +296,7 @@ $useReleaseZipMode = (-not [string]::IsNullOrWhiteSpace($ReleaseZipPath)) -or (-
 
 if (-not $useReleaseZipMode) {
     if ([string]::IsNullOrWhiteSpace($SourcePath)) {
-        $SourcePath = Split-Path -Parent $PSScriptRoot
+        $SourcePath = $defaultRoot
     }
     $SourcePath = [System.IO.Path]::GetFullPath($SourcePath)
     if (-not (Test-Path -LiteralPath $SourcePath -PathType Container)) {

@@ -19,7 +19,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$TargetRoot = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }),
+    [string]$TargetRoot = "",
     [string]$SourceRoot = "",
     [switch]$DryRun,
     [switch]$SkipTaskRegistration,
@@ -32,8 +32,13 @@ $ErrorActionPreference = "Stop"
 
 Add-Type -AssemblyName System.Security
 
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+$defaultRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+if ([string]::IsNullOrWhiteSpace($TargetRoot)) {
+    $TargetRoot = $defaultRoot
+}
 if ([string]::IsNullOrWhiteSpace($SourceRoot)) {
-    $SourceRoot = Split-Path -Parent $PSScriptRoot
+    $SourceRoot = $defaultRoot
 }
 $SourceRoot = [System.IO.Path]::GetFullPath($SourceRoot)
 $TargetRoot = [System.IO.Path]::GetFullPath($TargetRoot)

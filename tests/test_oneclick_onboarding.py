@@ -693,3 +693,54 @@ def test_one_command_online_bootstrap_dry_run() -> None:
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert "DRY_RUN_PASS" in result.stdout
     assert "github.com/phuonghuster7/winowner-mcp" in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell only")
+def test_build_release_package_from_external_cwd_without_project_root(tmp_path: Path) -> None:
+    """Invoking Build-ReleasePackage.ps1 from an external CWD without -ProjectRoot must resolve the repo root via $PSScriptRoot."""
+    ext_cwd = tmp_path / "New folder"
+    ext_cwd.mkdir(parents=True, exist_ok=True)
+    out_dir = tmp_path / "ext_dist"
+
+    # 1. Dry-run from external CWD without -ProjectRoot
+    dry_cmd = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(ROOT / "scripts" / "Build-ReleasePackage.ps1"),
+        "-Version",
+        RELEASE_VERSION,
+        "-OutputDir",
+        str(out_dir),
+        "-DryRun",
+    ]
+    dry_res = subprocess.run(dry_cmd, cwd=ext_cwd, capture_output=True, text=True, timeout=45)
+    assert dry_res.returncode == 0, (dry_res.stdout, dry_res.stderr)
+    assert "SecretScan: PASS (0 violations)" in dry_res.stdout
+    m = re.search(r"Files:\s*(\d+)\s*\|", dry_res.stdout)
+    assert m and int(m.group(1)) >= 150, dry_res.stdout
+
+    # 2. Full package build from external CWD without -ProjectRoot
+    build_cmd = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(ROOT / "scripts" / "Build-ReleasePackage.ps1"),
+        "-Version",
+        RELEASE_VERSION,
+        "-OutputDir",
+        str(out_dir),
+    ]
+    build_res = subprocess.run(build_cmd, cwd=ext_cwd, capture_output=True, text=True, timeout=90)
+    assert build_res.returncode == 0, (build_res.stdout, build_res.stderr)
+    zip_file = out_dir / f"winowner-mcp-{RELEASE_VERSION}.zip"
+    assert zip_file.is_file()
+    with zipfile.ZipFile(zip_file) as zf:
+        names = set(zf.namelist())
+        assert "Install-WinOwner.cmd" in names
+        assert "tests/fixtures/shipment_fixture.py" in names
+

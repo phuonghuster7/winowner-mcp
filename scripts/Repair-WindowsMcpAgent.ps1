@@ -13,7 +13,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$TargetRoot = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }),
+    [string]$TargetRoot = "",
     [switch]$DryRun,
     [switch]$ClearEmergencyStop,
     [switch]$SkipWatchdogHeal,
@@ -23,8 +23,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+$PrimaryRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+if ([string]::IsNullOrWhiteSpace($TargetRoot)) {
+    $TargetRoot = $PrimaryRoot
+}
 $TargetRoot = [System.IO.Path]::GetFullPath($TargetRoot)
-$PrimaryRoot = if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { $TargetRoot }
 $IsPrimaryRoot = ($TargetRoot.TrimEnd('\').ToLowerInvariant() -eq $PrimaryRoot.TrimEnd('\').ToLowerInvariant())
 
 # 1. Inspect runtime/watchdog.lock

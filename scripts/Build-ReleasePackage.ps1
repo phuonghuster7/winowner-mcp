@@ -15,9 +15,9 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ProjectRoot = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }),
-    [string]$OutputDir = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "dist" } else { Join-Path (Get-Location).Path "dist" }),
-    [string]$AttestationPath = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "runtime\evidence\test_run_attestation.json" } else { Join-Path (Get-Location).Path "runtime\evidence\test_run_attestation.json" }),
+    [string]$ProjectRoot = "",
+    [string]$OutputDir = "",
+    [string]$AttestationPath = "",
     [string]$Version = "v1.2.0",
     [switch]$RequireAttestation,
     [switch]$DryRun
@@ -25,6 +25,18 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+$defaultProjectRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+    $ProjectRoot = $defaultProjectRoot
+}
+if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+    $OutputDir = Join-Path $ProjectRoot "dist"
+}
+if ([string]::IsNullOrWhiteSpace($AttestationPath)) {
+    $AttestationPath = Join-Path $ProjectRoot "runtime\evidence\test_run_attestation.json"
+}
 
 if ($PSHOME -and ($env:PSModulePath -notlike "*$PSHOME\Modules*")) {
     $env:PSModulePath = "$(Join-Path $PSHOME 'Modules');$env:PSModulePath"
@@ -70,7 +82,8 @@ $moduleSpecs = @(
     @{ Dir = "docs";          Exts = @(".md") },
     # Reviewed PNG exports only; no arbitrary screenshots or legacy SVGs.
     @{ Dir = "docs\assets";   Exts = @(".png"); ApprovedNames = @("guide-01-en.png", "guide-01-vi.png", "guide-02-en.png", "guide-02-vi.png", "guide-03-en.png", "guide-03-vi.png", "guide-04-en.png", "guide-04-vi.png") },
-    @{ Dir = "tests";         Exts = @(".py") }
+    @{ Dir = "tests";         Exts = @(".py") },
+    @{ Dir = "tests\fixtures"; Exts = @(".py") }
 )
 
 foreach ($spec in $moduleSpecs) {

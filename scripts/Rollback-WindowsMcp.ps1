@@ -18,7 +18,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$BackupDir = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "backups\baseline_p0" } else { Join-Path (Get-Location).Path "backups\baseline_p0" }),
+    [string]$BackupDir = "",
     [string]$TargetRoot = "",
     [switch]$LatestPreUpdate,
     [switch]$DryRun,
@@ -28,6 +28,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+$defaultRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
 
 function Get-PortableFileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -127,8 +130,10 @@ function Test-VerifiedMcpTaskOwnership {
     }
 }
 
-$defaultRoot = if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }
 $effectiveRoot = if (-not [string]::IsNullOrWhiteSpace($TargetRoot)) { [System.IO.Path]::GetFullPath($TargetRoot) } else { [System.IO.Path]::GetFullPath($defaultRoot) }
+if ([string]::IsNullOrWhiteSpace($BackupDir) -and (-not $LatestPreUpdate)) {
+    $BackupDir = Join-Path $effectiveRoot "backups\baseline_p0"
+}
 
 if ($LatestPreUpdate) {
     $backupsRoot = Join-Path $effectiveRoot "backups"

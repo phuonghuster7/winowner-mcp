@@ -22,11 +22,16 @@ param(
     [string]$SecretName = "windows-mcp-isolated.api_key",
     [System.Security.SecureString]$SecretValue = $null,
     [string]$ProfilePath = $(if ($env:APPDATA) { Join-Path $env:APPDATA "tunnel-client\windows-mcp-isolated.yaml" } else { Join-Path $env:USERPROFILE "AppData\Roaming\tunnel-client\windows-mcp-isolated.yaml" }),
-    [string]$SecretsDir = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "runtime\secrets" } else { Join-Path (Get-Location).Path "runtime\secrets" })
+    [string]$SecretsDir = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+if ([string]::IsNullOrWhiteSpace($SecretsDir)) {
+    $SecretsDir = Join-Path (Resolve-Path (Join-Path $scriptDir "..")).Path "runtime\secrets"
+}
 
 Add-Type -AssemblyName System.Security
 
