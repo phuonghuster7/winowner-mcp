@@ -61,6 +61,8 @@ def start(port: int, profile: str = "read_only") -> None:
             "--policy-path", str(policy),
             "--db-path", str(db_path),
         ]
+        if not os.getenv("WINOWNER_DISABLE_PROFILE_RESTORE"):
+            sys.argv.append("--restore-approved-profile")
         runpy.run_path(str(adapter), run_name="__main__")
 
 

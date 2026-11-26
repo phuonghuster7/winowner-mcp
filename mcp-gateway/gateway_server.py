@@ -1028,6 +1028,14 @@ class MCPGatewayServer:
         self.policy.register_subsystems(exec_ops=self.exec_ops, desktop_agent=self.desktop)
         return self.policy.reset_emergency_stop()
 
+    def switch_policy_profile(self, target_profile: str, *, reason: str = "owner_approved_profile_switch") -> str:
+        """Switch the active gateway policy profile live while preserving runtime isolation and E-Stop."""
+        if self.policy is None or not hasattr(self.policy, "switch_profile"):
+            raise RuntimeError("Active gateway policy does not support live profile switching")
+        new_prof = self.policy.switch_profile(target_profile, reason=reason)
+        self.server_version = "0.2.1" if self.policy.strict_v021_read_tools_only else "0.3.0"
+        return new_prof
+
     def exposed_tool_names(self) -> list[str]:
         """Return sorted list of tool names exposed by the current policy profile."""
         if self.policy.strict_v021_read_tools_only:

@@ -225,6 +225,7 @@ def create_cloud_autonomous_adapter_app(
     policy_path: str | Path | None = None,
     db_path: str | Path | None = None,
     enable_direct_coding: bool | None = None,
+    restore_approved_profile: bool = False,
 ) -> FastAPI:
     """Create a FastAPI ASGI application serving the Dedicated Cloud Autonomous Adapter on Port 8768."""
     if gateway is not None:
@@ -273,6 +274,27 @@ def create_cloud_autonomous_adapter_app(
     gw._oauth_signing_key = resolved_oauth_signing_key
     gw._owner_admin_token = resolved_owner_admin_token
     gw._revoked_oauth_tokens = app.state.revoked_oauth_tokens
+
+    # Track UX-1: Restore HMAC-verified owner-approved profile across process restart ONLY when opted in,
+    # an active non-expired non-revoked delegation exists in SQLite, and Emergency Stop is NOT active.
+    if (
+        restore_approved_profile
+        and getattr(gw, "policy", None) is not None
+        and getattr(gw.policy, "profile", "read_only") == "read_only"
+        and not (hasattr(gw, "is_emergency_stop_active") and gw.is_emergency_stop_active())
+        and hasattr(persistence, "get_owner_approved_profile")
+        and hasattr(gw, "switch_policy_profile")
+    ):
+        try:
+            persisted_state = persistence.get_owner_approved_profile(
+                secret=resolved_oauth_signing_key,
+                owner_id=app.state.expected_owner_id,
+            )
+            eff_restored = str(persisted_state.get("effective_profile") or "read_only")
+            if persisted_state.get("valid") and eff_restored != "read_only":
+                gw.switch_policy_profile(eff_restored, reason="restart_restore_owner_approved_profile")
+        except Exception:
+            pass
 
     # Durable SQLite persistence for MCP Stream sessions (Task 1)
     session_store = _SQLiteMcpSessionStore(resolved_db_path)
@@ -756,6 +778,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Shared caller authentication token",
     )
+    parser.add_argument(
+        "--restore-approved-profile",
+        action="store_true",
+        help="Restore HMAC-verified owner-approved profile from SQLite when active verified delegation exists",
+    )
     args = parser.parse_args(argv)
 
     # Strictly bind to loopback address (H03)
@@ -767,6 +794,7 @@ def main(argv: list[str] | None = None) -> int:
         policy_path=args.policy_path,
         db_path=args.db_path,
         caller_auth_token=args.caller_token,
+        restore_approved_profile=bool(args.restore_approved_profile),
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

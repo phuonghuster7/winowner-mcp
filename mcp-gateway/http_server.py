@@ -698,6 +698,19 @@ class _SQLiteOAuthPersistence:
                 ) VALUES (1, 0, '', NULL, 'none', '', 0)
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS owner_runtime_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    approved_profile TEXT NOT NULL DEFAULT 'read_only',
+                    approved_by TEXT NOT NULL DEFAULT '',
+                    delegation_id TEXT NOT NULL DEFAULT '',
+                    client_id TEXT NOT NULL DEFAULT '',
+                    updated_at REAL NOT NULL,
+                    signature TEXT NOT NULL
+                )
+                """
+            )
 
     def prune_expired_revocations(self) -> int:
         now = time.time()
@@ -1586,9 +1599,22 @@ class _SQLiteOAuthPersistence:
                 """,
                 (owner_id, client_id, now),
             )
-            row = cur.fetchone()
-            if row:
+            rows = cur.fetchall()
+            for row in rows:
                 rec = dict(row)
+                p_did = str(rec.get("delegation_id") or "").strip()
+                if p_did:
+                    p_del = conn.execute(
+                        "SELECT revoked, expires_at, total_used_count, total_operation_budget FROM owner_durable_delegations WHERE delegation_id = ?",
+                        (p_did,),
+                    ).fetchone()
+                    if (
+                        not p_del
+                        or int(p_del["revoked"]) != 0
+                        or float(p_del["expires_at"]) <= now
+                        or int(p_del["total_used_count"]) >= int(p_del["total_operation_budget"])
+                    ):
+                        continue
                 gid = str(rec["grant_id"])
                 new_sig = self._sign_owner_grant(
                     secret,
@@ -2266,6 +2292,7 @@ class _SQLiteOAuthPersistence:
                     "owner_id": d["owner_id"],
                     "client_id": d["client_id"],
                     "allowed_tools": tools,
+                    "allowed_tools_count": len(tools),
                     "allowed_workspaces": paths,
                     "issued_at": float(d["issued_at"]),
                     "expires_at": float(d["expires_at"]),
@@ -2276,6 +2303,158 @@ class _SQLiteOAuthPersistence:
                     "owner_global_filesystem": has_global_fs,
                 })
         return out
+
+    def get_latest_owner_delegation_summary(self, *, owner_id: str = "local_owner") -> dict[str, Any] | None:
+        """Return metadata for the most recent durable delegation (active, revoked, or expired) for status accuracy."""
+        now = time.time()
+        with self._db() as conn:
+            row = conn.execute(
+                """
+                SELECT delegation_id, client_id, issued_at, expires_at, revoked, revoked_reason,
+                       total_used_count, total_operation_budget
+                FROM owner_durable_delegations
+                WHERE owner_id = ?
+                ORDER BY issued_at DESC LIMIT 1
+                """,
+                (owner_id,),
+            ).fetchone()
+            if not row:
+                return None
+            exp = float(row["expires_at"])
+            rev = int(row["revoked"]) != 0
+            return {
+                "delegation_id": str(row["delegation_id"]),
+                "client_id": str(row["client_id"]),
+                "revoked": rev,
+                "revoked_reason": str(row["revoked_reason"] or ""),
+                "expired": (not rev) and (exp <= now),
+                "exhausted": (not rev) and int(row["total_used_count"]) >= int(row["total_operation_budget"]),
+                "expires_at": exp,
+            }
+
+    @staticmethod
+    def _sign_owner_runtime_state(
+        secret: str,
+        approved_profile: str,
+        approved_by: str,
+        delegation_id: str,
+        client_id: str,
+        updated_at: float,
+    ) -> str:
+        payload = f"ors|{approved_profile}|{approved_by}|{delegation_id}|{client_id}|{float(updated_at):.6f}"
+        return hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def set_owner_approved_profile(
+        self,
+        *,
+        secret: str,
+        profile: str,
+        approved_by: str = "local_owner",
+        delegation_id: str = "",
+        client_id: str = "",
+    ) -> dict[str, Any]:
+        """Persist an HMAC-signed owner-approved runtime profile for restart survival."""
+        valid_profiles = {"read_only", "developer_p2", "desktop_p3", "full_agent", "owner_full_control"}
+        clean_prof = str(profile or "").strip()
+        if clean_prof not in valid_profiles:
+            raise ValueError(f"Unsupported runtime profile: {profile!r}")
+        if not secret or len(str(secret).strip()) < 16 or str(secret).strip() == "default_secret":
+            raise ValueError("Invalid OAuth signing key for owner runtime state")
+        now = time.time()
+        sig = self._sign_owner_runtime_state(
+            secret,
+            clean_prof,
+            str(approved_by or "local_owner"),
+            str(delegation_id or ""),
+            str(client_id or ""),
+            now,
+        )
+        with self._db() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO owner_runtime_state (
+                    id, approved_profile, approved_by, delegation_id, client_id, updated_at, signature
+                ) VALUES (1, ?, ?, ?, ?, ?, ?)
+                """,
+                (clean_prof, str(approved_by or "local_owner"), str(delegation_id or ""), str(client_id or ""), now, sig),
+            )
+        return {
+            "approved_profile": clean_prof,
+            "approved_by": str(approved_by or "local_owner"),
+            "delegation_id": str(delegation_id or ""),
+            "client_id": str(client_id or ""),
+            "updated_at": now,
+        }
+
+    def get_owner_approved_profile(
+        self,
+        *,
+        secret: str,
+        owner_id: str = "local_owner",
+    ) -> dict[str, Any]:
+        """Load and HMAC-verify persisted owner-approved runtime profile; fails closed to read_only if invalid/revoked/expired."""
+        if not secret or len(str(secret).strip()) < 16 or str(secret).strip() == "default_secret":
+            return {"valid": False, "approved_profile": "read_only", "effective_profile": "read_only", "reason": "missing_signing_key"}
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT approved_profile, approved_by, delegation_id, client_id, updated_at, signature FROM owner_runtime_state WHERE id = 1"
+            ).fetchone()
+        if not row:
+            return {"valid": False, "approved_profile": "read_only", "effective_profile": "read_only", "reason": "not_configured"}
+        rec = dict(row)
+        expected_sig = self._sign_owner_runtime_state(
+            secret,
+            str(rec["approved_profile"]),
+            str(rec["approved_by"]),
+            str(rec["delegation_id"]),
+            str(rec["client_id"]),
+            float(rec["updated_at"]),
+        )
+        if not hmac.compare_digest(str(rec.get("signature") or ""), expected_sig):
+            return {"valid": False, "approved_profile": "read_only", "effective_profile": "read_only", "reason": "signature_invalid"}
+        saved_prof = str(rec["approved_profile"])
+        if saved_prof == "read_only":
+            return {
+                "valid": True,
+                "approved_profile": "read_only",
+                "effective_profile": "read_only",
+                "delegation_id": str(rec.get("delegation_id") or ""),
+                "client_id": str(rec.get("client_id") or ""),
+                "updated_at": float(rec["updated_at"]),
+                "reason": "read_only_configured",
+            }
+        # Fail-closed invariant: non-read_only persisted profile ONLY activates if an active HMAC-verified delegation/grant exists
+        active_dels = self.list_active_owner_delegations(secret=secret, owner_id=owner_id)
+        active_grants = self.count_active_owner_grants(owner_id=owner_id)
+        if not active_dels and active_grants <= 0:
+            return {
+                "valid": False,
+                "approved_profile": saved_prof,
+                "effective_profile": "read_only",
+                "delegation_id": str(rec.get("delegation_id") or ""),
+                "client_id": str(rec.get("client_id") or ""),
+                "updated_at": float(rec["updated_at"]),
+                "reason": "no_active_owner_delegation",
+            }
+        return {
+            "valid": True,
+            "approved_profile": saved_prof,
+            "effective_profile": saved_prof,
+            "delegation_id": str(rec.get("delegation_id") or ""),
+            "client_id": str(rec.get("client_id") or ""),
+            "updated_at": float(rec["updated_at"]),
+            "reason": "active_verified_owner_delegation",
+        }
+
+    def clear_owner_approved_profile(self, *, secret: str, reason: str = "revoked_by_owner") -> dict[str, Any]:
+        """Reset persisted owner-approved runtime profile back to read_only."""
+        return self.set_owner_approved_profile(
+            secret=secret,
+            profile="read_only",
+            approved_by=str(reason or "revoked_by_owner"),
+            delegation_id="",
+            client_id="",
+        )
 
     def count_active_owner_grants(
         self,
@@ -4847,6 +5026,17 @@ def register_oauth_endpoints(
         else:
             state_machine = "LOCAL_READY"
 
+        latest_del_summary = (
+            pers.get_latest_owner_delegation_summary(owner_id=expected_owner)
+            if hasattr(pers, "get_latest_owner_delegation_summary")
+            else None
+        )
+        persisted_prof_state = (
+            pers.get_owner_approved_profile(secret=sk, owner_id=expected_owner)
+            if hasattr(pers, "get_owner_approved_profile")
+            else {"valid": False, "approved_profile": "read_only", "effective_profile": "read_only", "reason": "unavailable"}
+        )
+
         return {
             "ok": True,
             "state": state_machine,
@@ -4854,6 +5044,8 @@ def register_oauth_endpoints(
             "emergency_stop": is_estop,
             "local_auth_enforced": bool(getattr(app.state, "require_autonomous_auth", True)),
             "allow_loopback_tunnel_identity": bool(getattr(app.state, "allow_loopback_tunnel_identity", False)),
+            "session_restored_from_db": bool(has_verified_owner),
+            "persisted_profile_state": persisted_prof_state,
             "chatgpt_connection": {
                 "verified_read_tool_call": bool(cg_state.get("verified_read_tool_call", False)),
                 "last_verified_tool": cg_state.get("last_verified_tool"),
@@ -4874,9 +5066,8 @@ def register_oauth_endpoints(
                 "pending_challenges_count": len(pending_challenges),
                 "expires_at": expires_iso,
                 "remaining_seconds": rem_sec,
-                "revoked": not has_verified_owner and bool(
-                    verified_cid and pers.has_any_owner_records_for_client(owner_id=expected_owner, client_id=verified_cid)
-                ),
+                "revoked": bool((not has_verified_owner) and latest_del_summary and latest_del_summary.get("revoked")),
+                "expired": bool((not has_verified_owner) and latest_del_summary and latest_del_summary.get("expired")),
             },
             "effective_permissions": {
                 "level": eff_level,
@@ -5046,6 +5237,33 @@ def register_oauth_endpoints(
         except ValueError as exc:
             return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_request", "error_description": str(exc)})
 
+        activated_profile = None
+        if bool(body.get("activate_profile", False)):
+            req_target_prof = str(body.get("target_profile") or "").strip()
+            eff_target_prof = req_target_prof or (
+                "owner_full_control"
+                if str(res.get("approved_permission_level") or "").upper() in ("OWNER", "SCOPED")
+                else "read_only"
+            )
+            try:
+                app.state.oauth_persistence.set_owner_approved_profile(
+                    secret=app.state.oauth_signing_key,
+                    profile=eff_target_prof,
+                    approved_by="local_owner",
+                    delegation_id=str(res.get("delegation_id") or ""),
+                    client_id=str(res.get("client_id") or ""),
+                )
+                gw_ref = getattr(app.state, "gateway", None)
+                if (
+                    gw_ref is not None
+                    and not (hasattr(gw_ref, "is_emergency_stop_active") and gw_ref.is_emergency_stop_active())
+                    and hasattr(gw_ref, "switch_policy_profile")
+                ):
+                    gw_ref.switch_policy_profile(eff_target_prof, reason="owner_pairing_challenge_approved")
+                activated_profile = eff_target_prof
+            except ValueError as exc:
+                return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_request", "error_description": str(exc)})
+
         _audit_grant_admin_event(
             "oauth_approve_pairing_challenge",
             "PERMIT",
@@ -5056,9 +5274,13 @@ def register_oauth_endpoints(
                 "delegation_id": res.get("delegation_id"),
                 "capability_grant_id": res.get("capability_grant_id"),
                 "approved_permission_level": res.get("approved_permission_level"),
+                "activated_profile": activated_profile,
             },
         )
-        return JSONResponse(status_code=200, content={**res, "owner_status": _compute_owner_status_snapshot()})
+        out_payload = {**res, "owner_status": _compute_owner_status_snapshot()}
+        if activated_profile is not None:
+            out_payload["activated_profile"] = activated_profile
+        return JSONResponse(status_code=200, content=out_payload)
 
     @app.post("/oauth/pairing/challenges/{challenge_id}/deny")
     async def oauth_deny_pairing_challenge(challenge_id: str, request: Request) -> Response:
@@ -5128,6 +5350,14 @@ def register_oauth_endpoints(
         revoke_all = bool(body.get("revoke_all", not (delegation_id or grant_id or client_id)))
         reason = str(body.get("reason") or "revoked_by_local_owner")
 
+        prev_persisted = (
+            app.state.oauth_persistence.get_owner_approved_profile(
+                secret=app.state.oauth_signing_key,
+                owner_id=getattr(app.state, "expected_owner_id", "local_owner"),
+            )
+            if hasattr(app.state.oauth_persistence, "get_owner_approved_profile")
+            else {}
+        )
         rev_res = app.state.oauth_persistence.revoke_owner_access(
             delegation_id=delegation_id,
             grant_id=grant_id,
@@ -5137,6 +5367,39 @@ def register_oauth_endpoints(
         )
         app.state.revoked_oauth_tokens = app.state.oauth_persistence.load_active_revocations()
         gw_ref = getattr(app.state, "gateway", None)
+        remaining_dels = (
+            app.state.oauth_persistence.list_active_owner_delegations(
+                secret=app.state.oauth_signing_key,
+                owner_id=getattr(app.state, "expected_owner_id", "local_owner"),
+            )
+            if hasattr(app.state.oauth_persistence, "list_active_owner_delegations")
+            else []
+        )
+        remaining_grants = (
+            app.state.oauth_persistence.count_active_owner_grants(
+                owner_id=getattr(app.state, "expected_owner_id", "local_owner"),
+            )
+            if hasattr(app.state.oauth_persistence, "count_active_owner_grants")
+            else 0
+        )
+        if not remaining_dels and remaining_grants <= 0:
+            if hasattr(app.state.oauth_persistence, "clear_owner_approved_profile"):
+                try:
+                    app.state.oauth_persistence.clear_owner_approved_profile(
+                        secret=app.state.oauth_signing_key,
+                        reason=reason,
+                    )
+                except Exception:
+                    pass
+            should_reset_live = bool(
+                body.get("reset_profile_to_read_only", False)
+                or (prev_persisted.get("valid") and prev_persisted.get("approved_profile") != "read_only")
+            )
+            if should_reset_live and gw_ref is not None and hasattr(gw_ref, "switch_policy_profile"):
+                try:
+                    gw_ref.switch_policy_profile("read_only", reason="owner_access_revoked")
+                except Exception:
+                    pass
         if gw_ref is not None:
             gw_ref._revoked_oauth_tokens = app.state.revoked_oauth_tokens
             if revoke_all and getattr(gw_ref, "policy", None) is not None and hasattr(gw_ref.policy, "sessions"):
@@ -5151,6 +5414,76 @@ def register_oauth_endpoints(
             rev_res,
         )
         return JSONResponse(status_code=200, content={**rev_res, "owner_status": _compute_owner_status_snapshot()})
+
+    @app.post("/oauth/owner/profile")
+    async def oauth_owner_switch_profile(request: Request) -> Response:
+        """Loopback + owner_admin_token guarded endpoint to align live & persisted runtime profile after owner verification."""
+        disallowed_err = _check_disallowed_query_secrets(request)
+        if disallowed_err is not None:
+            return disallowed_err
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_request", "error_description": "JSON object body expected"})
+        admin_err = _require_loopback_owner_admin(request, body, "oauth_owner_switch_profile")
+        if admin_err is not None:
+            return admin_err
+        target_profile = str(body.get("profile") or "").strip()
+        if target_profile not in ("read_only", "developer_p2", "desktop_p3", "full_agent", "owner_full_control"):
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": "invalid_request", "error_description": f"Unsupported profile: {target_profile!r}"},
+            )
+        gw_ref = getattr(app.state, "gateway", None)
+        expected_owner = getattr(app.state, "expected_owner_id", "local_owner")
+        if target_profile != "read_only":
+            if gw_ref is not None and hasattr(gw_ref, "is_emergency_stop_active") and gw_ref.is_emergency_stop_active():
+                return JSONResponse(
+                    status_code=409,
+                    content={"ok": False, "error": "emergency_stop_active", "error_description": "Cannot elevate profile while Emergency Stop is active"},
+                )
+            active_dels = app.state.oauth_persistence.list_active_owner_delegations(
+                secret=app.state.oauth_signing_key,
+                owner_id=expected_owner,
+            )
+            if not active_dels:
+                _audit_grant_admin_event(
+                    "oauth_owner_switch_profile",
+                    "DENY",
+                    f"Refused profile switch to '{target_profile}' with zero active verified owner delegations",
+                )
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "ok": False,
+                        "error": "owner_verification_required",
+                        "error_description": "At least one active verified OAuth 2.1 owner delegation is required before activating a privileged profile",
+                    },
+                )
+            top_del = active_dels[0]
+            app.state.oauth_persistence.set_owner_approved_profile(
+                secret=app.state.oauth_signing_key,
+                profile=target_profile,
+                approved_by="local_owner",
+                delegation_id=str(top_del.get("delegation_id") or ""),
+                client_id=str(top_del.get("client_id") or ""),
+            )
+        else:
+            app.state.oauth_persistence.clear_owner_approved_profile(
+                secret=app.state.oauth_signing_key,
+                reason="owner_requested_read_only",
+            )
+        if gw_ref is not None and hasattr(gw_ref, "switch_policy_profile"):
+            gw_ref.switch_policy_profile(target_profile, reason="owner_admin_api_profile_switch")
+        _audit_grant_admin_event(
+            "oauth_owner_switch_profile",
+            "PERMIT",
+            f"Switched active and persisted profile to '{target_profile}'",
+            {"profile": target_profile},
+        )
+        return JSONResponse(status_code=200, content={"ok": True, "profile": target_profile, "owner_status": _compute_owner_status_snapshot()})
 
     @app.post("/oauth/owner/emergency-stop")
     async def oauth_owner_emergency_stop(request: Request) -> Response:
