@@ -1,27 +1,22 @@
-"""Phase 3 — WinOwner Setup Center & Four-Step Onboarding UX Controller.
+"""Phase B/C/D/E — WinOwner Setup Center & Native Windows Fluent 4-Step Onboarding Wizard.
 
 Provides:
-1. Exact 4-Step State Machine reflecting real backend truth (ZERO fake success states):
+1. Authoritative 4-Step State Machine reflecting real backend truth (ZERO fake success states):
    LOCAL_READY -> CHATGPT_CONNECTED -> OWNER_VERIFIED -> OWNER_CONTROL_READY
-2. WinOwner Setup Center Main Screen live 6-row status table:
-   - Local Service:  Ready | Error
-   - Tunnel:         Connected | Disconnected
-   - ChatGPT:        Verified | Not Verified
-   - Owner Identity: Verified | Pending
-   - Permissions:    Read | Scoped | Owner
-   - Version:        Current | Update Available
-3. Eight Owner-Controlled Actions (minimal clicks, no terminal required after install):
-   - Install / Repair
-   - Connect ChatGPT
-   - Verify Connection
-   - Review Owner Access (Approve / Deny pending verifiable OAuth 2.1 pairing challenges)
-   - Revoke Access (+ Emergency Stop control)
-   - Reconfigure Tunnel
-   - Check for Updates
-   - Uninstall
-4. Bilingual VI & EN toggle, plain user language, actionable error fixes, zero secret exposure,
-   zero innerHTML XSS sinks, strict loopback + Host/Origin/Referer + HttpOnly SameSite=Strict
-   cookie + X-CSRF-Token protection.
+   plus deterministic 9-state UI lifecycle (`loading`, `connecting`, `connection_failed`,
+   `waiting_authorization`, `revoked`, `expired`, `emergency_stopped`, `offline`, `reconnecting`).
+2. Native Windows Fluent Light 4-Step Onboarding Wizard (`/setup`) designed for non-technical users:
+   - Step 1: Setup (automatic readiness checks + Retry / Repair on failure)
+   - Step 2: Connect ChatGPT (Tunnel ID + API Key, key preserved on error, inline alerts, real verification)
+   - Step 3: Authorize (clear consent summary, verification code, single-click Confirm Owner Access)
+   - Step 4: Ready (honest permission pill, Open ChatGPT, Test connection, 3 harmless examples, Revoke / E-Stop)
+3. Slide-over Advanced Settings drawer (`Cài đặt nâng cao` / `Advanced Settings`):
+   - 6-row live diagnostic status table (`Local Service`, `Tunnel`, `ChatGPT`, `Owner Identity`, `Permissions`, `Version`)
+   - Redacted diagnostic/audit Logs (`GET /setup/api/logs`)
+   - Repair, Check for Updates, Rollback (`POST /setup/api/actions/rollback`), Reconfigure Tunnel, Uninstall, Logout
+4. Strict security invariants:
+   - Bilingual VI & EN parity, zero secret exposure, DOM textContent-only rendering,
+   - Loopback + Host/Origin/Referer + HttpOnly SameSite=Strict cookie + multi-tab CSRF handoff reuse & auto-resync.
 """
 from __future__ import annotations
 
@@ -30,10 +25,10 @@ import getpass
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import secrets
-import subprocess
 import sys
 import threading
 import time
@@ -70,6 +65,28 @@ FOUR_STEP_SEQUENCE = (
     "OWNER_CONTROL_READY",
 )
 
+NINE_UI_STATES = (
+    "loading",
+    "connecting",
+    "connection_failed",
+    "waiting_authorization",
+    "revoked",
+    "expired",
+    "emergency_stopped",
+    "offline",
+    "reconnecting",
+)
+
+_LOG_SECRET_PATTERNS = (
+    re.compile(r"(Bearer\s+)[^\s\"',;]+", re.IGNORECASE),
+    re.compile(r"\b(?:sk|rk|mcp_oadm|hnd|wsess)_[A-Za-z0-9_\-]{8,}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}\b"),
+    re.compile(
+        r"((?:runtime_api_key|api_key|access_token|refresh_token|client_secret|password|owner_admin_token|signing_key|cookie_token|csrf_token)\s*[:=]\s*['\"]?)[^'\"\s,;}{]+",
+        re.IGNORECASE,
+    ),
+)
+
 
 def get_current_windows_user_identity() -> str:
     """Return canonical lowercased Windows user identity for local handoff binding."""
@@ -89,7 +106,6 @@ def _parse_semver_tuple(tag: str) -> tuple[int, int, int, int, str] | None:
         return None
     major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
     prerelease = m.group(4) or ""
-    # Stable release > prerelease of same X.Y.Z
     is_stable = 1 if not prerelease else 0
     return (major, minor, patch, is_stable, prerelease)
 
@@ -100,6 +116,25 @@ def _is_newer_semver(candidate_tag: str, current_tag: str) -> bool:
     if c_parsed is None or cur_parsed is None:
         return False
     return c_parsed > cur_parsed
+
+
+def _default_local_service_probe(port: int = 8768) -> bool:
+    """Live-probe GET http://127.0.0.1:<port>/health to confirm local MCP adapter liveness."""
+    url = f"http://127.0.0.1:{int(port)}/health"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=1.2) as resp:
+            if resp.status != 200:
+                return False
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            return bool(
+                isinstance(data, dict)
+                and data.get("status") == "ok"
+                and data.get("require_autonomous_auth") is True
+                and data.get("allow_loopback_tunnel_identity") is False
+            )
+    except Exception:
+        return False
 
 
 def _default_tunnel_probe(root: Path, port: int = 8768) -> dict[str, Any]:
@@ -135,6 +170,65 @@ def _default_tunnel_probe(root: Path, port: int = 8768) -> dict[str, Any]:
         "readyz_ok": bool(readyz_ok),
         "status_code": detail,
     }
+
+
+def _has_rollback_snapshot(root: Path) -> bool:
+    """Return True if at least one verified pre-update or tunnel reconfiguration backup exists."""
+    try:
+        pre_update = root / "backups"
+        if pre_update.is_dir() and any(d.is_dir() and d.name.startswith("pre_update_") for d in pre_update.iterdir()):
+            return True
+        tunnel_bkp = root / "runtime" / "secrets" / "backups"
+        if tunnel_bkp.is_dir() and any(
+            d.is_dir() and d.name.startswith("tunnel_reconfig_") for d in tunnel_bkp.iterdir()
+        ):
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _scrub_log_text(text: str, extra_secrets: tuple[str, ...] = ()) -> str:
+    """Scrub all credential-like patterns and known runtime secrets from log lines."""
+    out = str(redact_secrets(text or ""))
+    for sec in extra_secrets:
+        if sec and len(sec) >= 6:
+            out = out.replace(sec, "[REDACTED]")
+    for pat in _LOG_SECRET_PATTERNS:
+        if pat.groups:
+            out = pat.sub(r"\1[REDACTED]", out)
+        else:
+            out = pat.sub("[REDACTED]", out)
+    return out
+
+
+def _inspect_last_delegation_lifecycle(persistence: Any) -> str:
+    """Inspect SQLite owner_durable_delegations to distinguish 'active', 'revoked', 'expired', or 'none'."""
+    if persistence is None or not hasattr(persistence, "_db"):
+        return "none"
+    now = time.time()
+    try:
+        with persistence._db() as conn:
+            row = conn.execute(
+                """
+                SELECT revoked, expires_at
+                FROM owner_durable_delegations
+                WHERE owner_id = 'local_owner'
+                ORDER BY issued_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return "none"
+        revoked = bool(row[0])
+        expires_at = float(row[1] or 0.0)
+        if revoked:
+            return "revoked"
+        if expires_at > 0 and now >= expires_at:
+            return "expired"
+        return "active"
+    except Exception:
+        return "none"
 
 
 def _resolve_persistence_and_keys(
@@ -182,8 +276,10 @@ def compute_setup_center_state(
     local_service_ready: bool = True,
     tunnel_info: dict[str, Any] | None = None,
     version_state: dict[str, Any] | None = None,
+    last_action_revoked: bool = False,
+    rollback_available: bool | None = None,
 ) -> dict[str, Any]:
-    """Compute the authoritative 4-step state machine and 6-row live status table from backend truth."""
+    """Compute the authoritative 4-step state machine, 9-state UI model, and 6-row status table from backend truth."""
     from runtime.release_identity import get_release_identity
 
     rel_id = get_release_identity()
@@ -219,8 +315,9 @@ def compute_setup_center_state(
     else:
         t_info = dict(tunnel_info)
 
-    # Note: If tunnel is not explicitly probed as disconnected, check whether tunnel_info says connected.
     tunnel_connected = bool(t_info.get("connected", False))
+    tunnel_configured = bool(t_info.get("configured", False))
+    tunnel_status_code = str(t_info.get("status_code") or "TUNNEL_NOT_CONFIGURED")
     tunnel_explicitly_disconnected = bool(t_info.get("explicit_disconnect", False))
 
     # ChatGPT Verified requires a REAL verified read-only MCP tool call recorded by backend.
@@ -279,7 +376,6 @@ def compute_setup_center_state(
         allow_dest = bool(top_del.get("allow_destructive_operations", False)) if top_del else False
         owner_control_ready = True
 
-    # Version row
     v_state = version_state or {}
     latest_ver = str(v_state.get("latest_version") or current_version)
     update_available = bool(
@@ -309,45 +405,76 @@ def compute_setup_center_state(
         current_state = "OWNER_CONTROL_READY"
         completed_steps_count = 4
 
+    last_delegation_status = "active" if has_verified_owner else _inspect_last_delegation_lifecycle(persistence)
+    if not has_verified_owner and last_action_revoked:
+        last_delegation_status = "revoked"
+
+    last_auth_mode = str(cg_raw.get("last_auth_mode") or "none")
+    supports_verifiable_id = bool(cg_raw.get("supports_verifiable_owner_identity", False))
+
+    # Centralized deterministic UI state (covers all 9 lifecycle visual states + ready states)
+    if not step1_done:
+        ui_state = "offline"
+    elif is_estop:
+        ui_state = "emergency_stopped"
+    elif len(pending_challenges) > 0 and not has_verified_owner:
+        ui_state = "waiting_authorization"
+    elif not has_verified_owner and last_delegation_status == "revoked":
+        ui_state = "revoked"
+    elif not has_verified_owner and last_delegation_status == "expired":
+        ui_state = "expired"
+    elif not step2_done:
+        if tunnel_status_code in ("TUNNEL_FAILED", "TUNNEL_ERROR"):
+            ui_state = "connection_failed"
+        elif tunnel_configured and not tunnel_connected and not tunnel_explicitly_disconnected:
+            ui_state = "reconnecting"
+        else:
+            ui_state = "setup_connect"
+    elif step4_done:
+        ui_state = "ready_owner_control"
+    elif step3_done:
+        ui_state = "ready_read_only"
+    elif not supports_verifiable_id or last_auth_mode == "shared_tunnel_bearer":
+        ui_state = "ready_read_only"
+    else:
+        ui_state = "waiting_authorization"
+
     steps_detail = [
         {
             "step": 1,
             "id": "LOCAL_READY",
             "completed": step1_done,
             "active": current_state == "LOCAL_READY",
-            "label_en": "1. Local Service Ready",
-            "label_vi": "1. Dịch vụ cục bộ sẵn sàng",
+            "label_en": "1. Setup",
+            "label_vi": "1. Cài đặt",
         },
         {
             "step": 2,
             "id": "CHATGPT_CONNECTED",
             "completed": step2_done,
             "active": current_state == "CHATGPT_CONNECTED",
-            "label_en": "2. ChatGPT Connected (Verified Read Tool Call)",
-            "label_vi": "2. Đã kết nối ChatGPT (Đã xác minh gọi tool đọc thật)",
+            "label_en": "2. Connect",
+            "label_vi": "2. Kết nối",
         },
         {
             "step": 3,
             "id": "OWNER_VERIFIED",
             "completed": step3_done,
             "active": current_state == "OWNER_VERIFIED",
-            "label_en": "3. Owner Identity Verified",
-            "label_vi": "3. Đã xác minh danh tính Chủ máy",
+            "label_en": "3. Authorize",
+            "label_vi": "3. Xác nhận quyền",
         },
         {
             "step": 4,
             "id": "OWNER_CONTROL_READY",
             "completed": step4_done,
             "active": current_state == "OWNER_CONTROL_READY",
-            "label_en": "4. Owner Control Ready",
-            "label_vi": "4. Sẵn sàng quyền điều khiển Chủ máy",
+            "label_en": "4. Ready",
+            "label_vi": "4. Sẵn sàng",
         },
     ]
 
-    last_auth_mode = str(cg_raw.get("last_auth_mode") or "none")
-    supports_verifiable_id = bool(cg_raw.get("supports_verifiable_owner_identity", False))
-
-    # Actionable guidance in plain English and Vietnamese
+    # Actionable guidance in English and Vietnamese (preserves honest Authentication: None boundary explanation)
     if not step1_done:
         guidance_en = "Local MCP service is not ready. Click 'Install / Repair' to verify and start the local service."
         guidance_vi = "Dịch vụ MCP cục bộ chưa sẵn sàng. Nhấn 'Cài đặt / Sửa chữa' để kiểm tra và khởi động dịch vụ."
@@ -369,8 +496,8 @@ def compute_setup_center_state(
             guidance_en = "ChatGPT is connected in Read-Only mode (`Authentication: None` / shared tunnel credential). Platform boundary: `Authentication: None` does not provide verifiable per-client identity and is strictly capped at `Read`. To use Scoped or Owner control, connect via OAuth 2.1 and approve the pairing challenge locally."
             guidance_vi = "ChatGPT đang kết nối ở chế độ Chỉ đọc (`Authentication: None` / khóa tunnel dùng chung). Giới hạn nền tảng: `Authentication: None` không cung cấp danh tính client có thể xác minh nên luôn giới hạn ở mức `Read`. Để dùng quyền `Scoped` hoặc `Owner`, hãy kết nối qua OAuth 2.1 và phê duyệt yêu cầu ghép nối ngay trên máy."
         else:
-            guidance_en = "ChatGPT is verified (`Read`). When ChatGPT requests owner pairing (`agent_request_owner_pairing`), click 'Review Owner Access' here to approve or deny."
-            guidance_vi = "ChatGPT đã xác minh (`Read`). Khi ChatGPT gửi yêu cầu ghép nối chủ máy (`agent_request_owner_pairing`), hãy nhấn 'Duyệt quyền Chủ máy' tại đây để phê duyệt hoặc từ chối."
+            guidance_en = "ChatGPT is verified (`Read`). When ChatGPT requests owner pairing, review and confirm access here."
+            guidance_vi = "ChatGPT đã xác minh (`Read`). Khi ChatGPT gửi yêu cầu xác nhận quyền chủ máy, hãy kiểm tra và phê duyệt ngay tại đây."
     elif not step4_done:
         guidance_en = f"Owner identity is verified, but the local service profile is currently '{profile_name}' (`Permissions: Read`). Switch to a scoped or owner profile via 'Install / Repair' when you want write/execute control."
         guidance_vi = f"Danh tính chủ máy đã xác minh, nhưng cấu hình dịch vụ cục bộ đang ở '{profile_name}' (`Quyền hạn: Read`). Hãy chuyển sang cấu hình có phạm vi hoặc chủ máy qua 'Cài đặt / Sửa chữa' khi cần quyền ghi/thực thi."
@@ -421,22 +548,31 @@ def compute_setup_center_state(
             "remaining_seconds": d.get("remaining_seconds", 0),
         })
 
+    rb_avail = _has_rollback_snapshot(PROJECT_ROOT) if rollback_available is None else bool(rollback_available)
+
     return {
         "ok": True,
         "schema_version": "1.2.0",
         "state": current_state,
+        "ui_state": ui_state,
+        "last_delegation_status": last_delegation_status,
         "completed_steps_count": completed_steps_count,
         "steps": steps_detail,
         "status_table": status_table,
+        "checks": {
+            "runtime_ready": bool(local_service_ready),
+            "service_ready": bool(local_service_ready),
+            "security_ready": bool(local_auth_enforced and not allow_loopback_tunnel_identity),
+        },
         "profile": profile_name,
         "emergency_stop": is_estop,
         "local_auth_enforced": local_auth_enforced,
         "allow_loopback_tunnel_identity": allow_loopback_tunnel_identity,
         "tunnel_details": {
             "connected": tunnel_connected,
-            "configured": bool(t_info.get("configured", False)),
+            "configured": tunnel_configured,
             "readyz_ok": bool(t_info.get("readyz_ok", False)),
-            "status_code": str(t_info.get("status_code") or "TUNNEL_NOT_CONFIGURED"),
+            "status_code": tunnel_status_code,
         },
         "chatgpt_connection": {
             "verified_read_tool_call": chatgpt_verified,
@@ -445,8 +581,8 @@ def compute_setup_center_state(
             "last_auth_mode": last_auth_mode,
             "last_client_id_masked": str(cg_raw.get("last_client_id_masked") or ""),
             "supports_verifiable_owner_identity": supports_verifiable_id,
-            "verification_prompt_en": "Call agent_system_status or list my approved workspaces in read-only mode.",
-            "verification_prompt_vi": "Hãy gọi công cụ chỉ đọc agent_system_status hoặc liệt kê các workspace đã được phê duyệt.",
+            "verification_prompt_en": "Check my computer specs and disk space",
+            "verification_prompt_vi": "Kiểm tra cấu hình máy tính và dung lượng ổ đĩa của tôi",
         },
         "owner_identity": {
             "state": "Verified" if has_verified_owner else "Pending",
@@ -478,6 +614,7 @@ def compute_setup_center_state(
             "update_available": update_available,
             "git_sha": rel_id.get("source_commit"),
             "verified_release_only": True,
+            "rollback_available": rb_avail,
         },
         "guidance": {
             "en": guidance_en,
@@ -496,365 +633,1344 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
   <title>WinOwner Setup Center — v1.2.0</title>
   <style>
     :root {
-      --bg: #0b0f19;
-      --panel: #131b2e;
-      --panel-alt: #19233c;
-      --border: #2a395c;
-      --text: #e2e8f0;
-      --muted: #94a3b8;
-      --accent: #38bdf8;
-      --success: #22c55e;
-      --warn: #f59e0b;
-      --danger: #ef4444;
-      --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
-      --mono: 'Cascadia Code', 'Consolas', monospace;
+      --canvas: #f3f3f3;
+      --surface: #ffffff;
+      --surface-subtle: #f9fafb;
+      --border: #e5e7eb;
+      --border-input: #d1d5db;
+      --border-input-hover: #9ca3af;
+      --accent: #0067c0;
+      --accent-hover: #005a9e;
+      --accent-active: #004b85;
+      --accent-soft: #eff6ff;
+      --accent-soft-border: #bfdbfe;
+      --accent-halo: #dbeafe;
+      --text-primary: #111827;
+      --text-secondary: #4b5563;
+      --text-muted: #596270;
+      --success-text: #166534;
+      --success-icon: #15803d;
+      --success-bg: #ecfdf5;
+      --success-border: #a7f3d0;
+      --warn-text: #854d0e;
+      --warn-icon: #b45309;
+      --warn-bg: #fffbeb;
+      --warn-border: #fde68a;
+      --danger-text: #991b1b;
+      --danger-btn: #c42b1c;
+      --danger-btn-hover: #a52216;
+      --danger-bg: #fef2f2;
+      --danger-border: #fecaca;
+      --offline-text: #374151;
+      --offline-icon: #6b7280;
+      --offline-bg: #f3f4f6;
+      --offline-border: #d1d5db;
+      --font: 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+      --mono: 'Cascadia Mono', 'Consolas', monospace;
     }
+
     * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
     body {
-      margin: 0;
-      padding: 0;
-      background: var(--bg);
-      color: var(--text);
+      background: var(--canvas);
+      color: var(--text-primary);
       font-family: var(--font);
       font-size: 14px;
       line-height: 1.5;
+      min-height: 100vh;
     }
-    header {
+
+    :focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .hidden { display: none !important; }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    /* Top Bar (56px, Fluent Light) */
+    header[role="banner"] {
+      height: 56px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 14px 24px;
-      background: var(--panel);
-      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
       position: sticky;
       top: 0;
-      z-index: 40;
+      z-index: 30;
     }
-    .brand {
+    .brand-group {
       display: flex;
       align-items: center;
-      gap: 12px;
-      font-weight: 700;
-      font-size: 17px;
+      gap: 10px;
+      min-width: 0;
     }
-    .container {
-      max-width: 1240px;
-      margin: 0 auto;
-      padding: 20px;
-      display: grid;
-      grid-template-columns: repeat(12, 1fr);
-      gap: 16px;
+    .brand-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: -0.01em;
     }
-    .card {
-      background: var(--panel);
+    .brand-ver {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      background: var(--surface-subtle);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 18px;
+      border-radius: 999px;
+      padding: 1px 7px;
     }
-    .col-12 { grid-column: span 12; }
-    .col-7 { grid-column: span 7; }
-    .col-5 { grid-column: span 5; }
-    @media (max-width: 960px) {
-      .col-7, .col-5 { grid-column: span 12; }
+    .topbar-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
-    h2 {
-      margin: 0 0 12px 0;
-      font-size: 16px;
+    .lang-toggle {
+      display: inline-flex;
+      align-items: center;
+      background: var(--canvas);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2px;
+      height: 34px;
+      cursor: pointer;
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      gap: 2px;
+    }
+    .lang-seg {
+      padding: 4px 8px;
+      border-radius: 4px;
+      line-height: 1.2;
+      transition: background 0.12s, color 0.12s;
+    }
+    .lang-seg.active {
+      background: var(--surface);
+      color: var(--text-primary);
+      box-shadow: 0 1px 2px rgba(17,24,39,0.08);
+    }
+    .btn-ghost-top {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 34px;
+      padding: 0 10px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+    .btn-ghost-top:hover {
+      background: var(--canvas);
+      color: var(--text-primary);
+    }
+
+    /* Indeterminate Progress Bar */
+    .top-progress-wrap {
+      height: 3px;
+      width: 100%;
+      background: transparent;
+      overflow: hidden;
+      position: fixed;
+      top: 56px;
+      left: 0;
+      z-index: 35;
+    }
+    .top-progress-bar {
+      height: 100%;
+      width: 38%;
+      background: var(--accent);
+      border-radius: 2px;
+      animation: fluentSlide 1.3s ease-in-out infinite;
+    }
+    @keyframes fluentSlide {
+      0% { transform: translateX(-110%); }
+      100% { transform: translateX(360%); }
+    }
+    @keyframes fluentSpin {
+      to { transform: rotate(360deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .top-progress-bar, .spinner { animation: none !important; }
+    }
+
+    /* Main Wizard Shell (fits 1280x720 above the fold) */
+    .wizard-shell {
+      max-width: 560px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 18px 16px 22px;
+    }
+
+    /* Horizontal 4-Step Stepper */
+    nav.stepper {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin: 0 auto 14px;
+      padding: 2px 4px;
+      position: relative;
+    }
+    .step-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex: 1;
+      position: relative;
+      background: transparent;
+      border: 0;
+      padding: 0 2px;
+      cursor: default;
+      font-family: var(--font);
+      text-align: center;
+    }
+    .step-item.clickable { cursor: pointer; }
+    .step-item:not(:last-child)::after {
+      content: '';
+      position: absolute;
+      top: 12px;
+      left: calc(50% + 14px);
+      right: calc(-50% + 14px);
+      height: 2px;
+      background: var(--border);
+      z-index: 0;
+    }
+    .step-item.done:not(:last-child)::after {
+      background: var(--success-icon);
+    }
+    .step-node {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      position: relative;
+      z-index: 1;
+      background: var(--surface);
+      border: 1.5px solid var(--border-input);
+      color: var(--text-muted);
+      transition: all 0.15s;
+    }
+    .step-item.done .step-node {
+      background: var(--success-icon);
+      border-color: var(--success-icon);
+      color: #ffffff;
+    }
+    .step-item.active .step-node {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+      box-shadow: 0 0 0 3px var(--accent-halo);
+    }
+    .step-item.error .step-node {
+      background: var(--danger-btn);
+      border-color: var(--danger-btn);
+      color: #ffffff;
+    }
+    .step-label {
+      margin-top: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      line-height: 1.2;
+    }
+    .step-item.active .step-label {
       color: var(--accent);
+      font-weight: 600;
+    }
+    .step-item.done .step-label {
+      color: var(--text-primary);
+    }
+    .step-item.error .step-label {
+      color: var(--danger-text);
+      font-weight: 600;
+    }
+
+    /* Centered Fluent Wizard Card */
+    .wizard-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 28px;
+      box-shadow: 0 2px 8px rgba(17, 24, 39, 0.06), 0 1px 2px rgba(17, 24, 39, 0.04);
+    }
+    .card-header {
+      margin-bottom: 16px;
+    }
+    .card-header-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    h1.step-title {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 600;
+      line-height: 1.3;
+      color: var(--text-primary);
+      letter-spacing: -0.01em;
+    }
+    p.step-subtitle {
+      margin: 6px 0 0;
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.45;
+    }
+
+    /* State Alert Banners (All 9 states) */
+    .callout {
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 14px;
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 13.5px;
+    }
+    .callout-icon {
+      flex-shrink: 0;
+      margin-top: 1px;
+      width: 18px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .callout-body { flex: 1; min-width: 0; }
+    .callout-title { font-weight: 600; margin: 0 0 2px; }
+    .callout-desc { margin: 0; font-size: 13px; }
+    .callout-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+    .callout.info {
+      background: var(--accent-soft);
+      border-color: var(--accent-soft-border);
+      color: var(--accent-hover);
+    }
+    .callout.success {
+      background: var(--success-bg);
+      border-color: var(--success-border);
+      color: var(--success-text);
+    }
+    .callout.warn {
+      background: var(--warn-bg);
+      border-color: var(--warn-border);
+      color: var(--warn-text);
+    }
+    .callout.danger {
+      background: var(--danger-bg);
+      border-color: var(--danger-border);
+      color: var(--danger-text);
+    }
+    .callout.critical {
+      background: var(--danger-bg);
+      border: 2px solid var(--danger-btn);
+      color: var(--danger-text);
+    }
+    .callout.offline {
+      background: var(--offline-bg);
+      border-color: var(--offline-border);
+      color: var(--offline-text);
+    }
+
+    /* Spinner */
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2.5px solid var(--accent-halo);
+      border-top-color: var(--accent);
+      border-radius: 999px;
+      display: inline-block;
+      animation: fluentSpin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    .spinner.lg { width: 28px; height: 28px; border-width: 3px; }
+    .loading-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 40px 16px;
+      text-align: center;
+      color: var(--text-secondary);
+    }
+
+    /* Step 1 Check Rows */
+    .check-list {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-subtle);
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .check-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    .check-row:last-child { border-bottom: 0; }
+    .check-row-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+    .check-badge {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 2px 9px;
+      border-radius: 999px;
+    }
+    .check-badge.ok { background: var(--success-bg); color: var(--success-text); border: 1px solid var(--success-border); }
+    .check-badge.fail { background: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); }
+    .check-badge.wait { background: var(--accent-soft); color: var(--accent-hover); border: 1px solid var(--accent-soft-border); }
+
+    /* Form Controls */
+    .field-group { margin-bottom: 12px; }
+    label.field-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+    .field-hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 3px;
+    }
+    .input-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    input[type="text"], input[type="password"], select {
+      width: 100%;
+      height: 38px;
+      padding: 0 12px;
+      border: 1px solid var(--border-input);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text-primary);
+      font-family: var(--font);
+      font-size: 14px;
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+    input.mono-input {
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+    input:hover, select:hover { border-color: var(--border-input-hover); }
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-halo);
+    }
+    input:disabled, select:disabled {
+      background: var(--surface-subtle);
+      color: var(--text-muted);
+      cursor: not-allowed;
+    }
+    .input-eye-btn {
+      position: absolute;
+      right: 6px;
+      height: 28px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .input-eye-btn:hover { background: var(--canvas); color: var(--text-primary); }
+    input.has-eye { padding-right: 68px; }
+
+    /* Clean 2-Choice Mode Selector */
+    .mode-choices {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .mode-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 9px 10px;
+      border: 1px solid var(--border-input);
+      border-radius: 8px;
+      background: var(--surface);
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .mode-card:hover { border-color: var(--border-input-hover); }
+    .mode-card.selected {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .mode-card input[type="radio"] {
+      width: 15px;
+      height: 15px;
+      margin: 2px 0 0;
+      accent-color: var(--accent);
+      flex-shrink: 0;
+    }
+    .mode-card-title {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-primary);
+      line-height: 1.3;
+    }
+    .mode-card-desc {
+      font-size: 11.5px;
+      color: var(--text-secondary);
+      line-height: 1.3;
+      margin-top: 2px;
+    }
+
+    /* Collapsible Guide & Error Details */
+    details.fluent-details {
+      margin-bottom: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-subtle);
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+    details.fluent-details summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--accent);
+      list-style: none;
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
-    .stepper {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
+    details.fluent-details summary::-webkit-details-marker { display: none; }
+    details.fluent-details ol {
+      margin: 8px 0 2px;
+      padding-left: 18px;
+      color: var(--text-secondary);
+    }
+    details.fluent-details li { margin-bottom: 4px; }
+    .details-error-text {
+      margin: 8px 0 0;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--danger-text);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Buttons */
+    .btn-row {
+      display: flex;
+      align-items: center;
       gap: 10px;
+      margin-top: 14px;
+      flex-wrap: wrap;
     }
-    @media (max-width: 800px) {
-      .stepper { grid-template-columns: 1fr; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 40px;
+      padding: 0 16px;
+      border-radius: 6px;
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      border: 1px solid var(--border-input);
+      background: var(--surface);
+      color: var(--text-primary);
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
     }
-    .step-box {
-      padding: 12px;
-      border-radius: 8px;
-      background: var(--panel-alt);
-      border: 1px solid var(--border);
+    .btn:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--border-input-hover); }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: #ffffff; }
+    .btn-primary:active:not(:disabled) { background: var(--accent-active); border-color: var(--accent-active); }
+    .btn-danger {
+      background: var(--danger-btn);
+      border-color: var(--danger-btn);
+      color: #ffffff;
+    }
+    .btn-danger:hover:not(:disabled) { background: var(--danger-btn-hover); border-color: var(--danger-btn-hover); }
+    .btn-danger-outline {
+      background: var(--surface);
+      border-color: var(--danger-border);
+      color: var(--danger-text);
+    }
+    .btn-danger-outline:hover:not(:disabled) { background: var(--danger-bg); border-color: var(--danger-btn); }
+    .btn-link {
+      border: 0;
+      background: transparent;
+      color: var(--accent);
+      padding: 4px 6px;
+      min-height: 32px;
       font-size: 13px;
       font-weight: 600;
     }
-    .step-box.done {
-      border-color: var(--success);
-      color: var(--success);
-    }
-    .step-box.current {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 1px var(--accent);
-    }
-    table.status-table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-    table.status-table th, table.status-table td {
-      text-align: left;
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
-    }
+    .btn-link:hover:not(:disabled) { background: var(--accent-soft); }
+    .btn-sm { min-height: 32px; padding: 0 11px; font-size: 12.5px; }
+    .btn-full { width: 100%; }
+
+    /* Pills & Badges */
     .pill {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       padding: 3px 10px;
       border-radius: 999px;
       font-size: 12px;
-      font-weight: 700;
-      border: 1px solid var(--border);
-      background: var(--panel-alt);
-    }
-    .pill.green { color: var(--success); border-color: var(--success); }
-    .pill.amber { color: var(--warn); border-color: var(--warn); }
-    .pill.red { color: #fff; background: var(--danger); border-color: var(--danger); }
-    .pill.blue { color: var(--accent); border-color: var(--accent); }
-    .actions-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
-    }
-    button {
-      cursor: pointer;
-      border: 1px solid var(--border);
-      background: var(--panel-alt);
-      color: var(--text);
-      padding: 9px 14px;
-      border-radius: 7px;
       font-weight: 600;
-      font-size: 13px;
-      text-align: left;
-      transition: filter 0.15s;
-    }
-    button:hover { filter: brightness(1.15); }
-    button.primary { background: #0284c7; border-color: #38bdf8; color: #fff; }
-    button.success { background: #15803d; border-color: #22c55e; color: #fff; }
-    button.warn { background: #b45309; border-color: #f59e0b; color: #fff; }
-    button.danger { background: #dc2626; border-color: #f87171; color: #fff; }
-    .guidance-banner {
-      margin-top: 12px;
-      padding: 12px 14px;
-      background: #0d1526;
-      border-left: 4px solid var(--accent);
-      border-radius: 6px;
-      font-size: 13px;
-    }
-    .challenge-card {
-      border: 1px solid var(--warn);
-      background: var(--panel-alt);
-      border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 10px;
-    }
-    label {
-      display: block;
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 4px;
-    }
-    input, select {
-      width: 100%;
-      padding: 8px 10px;
-      background: #090d16;
       border: 1px solid var(--border);
-      color: var(--text);
-      border-radius: 6px;
-      font-family: var(--mono);
-      font-size: 12px;
-      margin-bottom: 10px;
+      background: var(--surface-subtle);
+      color: var(--text-primary);
     }
-    #login-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(8, 12, 22, 0.94);
+    .pill.green { background: var(--success-bg); border-color: var(--success-border); color: var(--success-text); }
+    .pill.blue { background: var(--accent-soft); border-color: var(--accent-soft-border); color: var(--accent-hover); }
+    .pill.amber { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn-text); }
+    .pill.red { background: var(--danger-bg); border-color: var(--danger-border); color: var(--danger-text); }
+    .pill.neutral { background: var(--offline-bg); border-color: var(--offline-border); color: var(--offline-text); }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: currentColor;
+      display: inline-block;
+    }
+
+    /* Step 2B Prompt Box & Step 4 Examples */
+    .subtle-box {
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+    }
+    .prompt-row {
       display: flex;
       align-items: center;
-      justify-content: center;
-      z-index: 100;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      margin-top: 6px;
     }
-    .login-box {
-      width: 420px;
-      background: var(--panel);
+    .prompt-text {
+      font-size: 13px;
+      color: var(--text-primary);
+      flex: 1;
+      min-width: 0;
+    }
+
+    /* Step 3 Consent Summary */
+    .consent-card {
+      background: var(--surface-subtle);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 24px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
     }
-    .hidden { display: none !important; }
-    pre {
-      background: #070a12;
+    .consent-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 10px;
+    }
+    .code-badge {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      background: var(--accent-soft);
+      color: var(--accent-hover);
+      border: 1px solid var(--accent-soft-border);
+      border-radius: 6px;
+      padding: 4px 10px;
+    }
+    .consent-list {
+      margin: 8px 0;
+      padding-left: 18px;
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+    .consent-list li { margin-bottom: 4px; }
+    .chip-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .chip {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+
+    /* Step 4 Truth Strip & Safety Footer */
+    .truth-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 14px;
+    }
+    .truth-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+    .examples-heading {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin: 14px 0 6px;
+    }
+    .safety-footer {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    /* Phase D Slide-Over Advanced Settings Drawer */
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(17, 24, 39, 0.42);
+      z-index: 60;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .drawer-panel {
+      width: 480px;
+      max-width: 94vw;
+      height: 100vh;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      box-shadow: -4px 0 24px rgba(17, 24, 39, 0.14);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .drawer-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .drawer-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .drawer-body {
+      padding: 16px 20px 24px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .adv-section {
+      margin-bottom: 18px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .adv-section:last-child { border-bottom: 0; margin-bottom: 0; }
+    .adv-section-title {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    table.adv-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+    }
+    table.adv-table th, table.adv-table td {
+      text-align: left;
+      padding: 7px 8px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    table.adv-table th {
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 11.5px;
+    }
+    .adv-logs {
+      background: var(--surface-subtle);
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 10px;
       font-family: var(--mono);
-      font-size: 12px;
-      white-space: pre-wrap;
-      max-height: 220px;
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: var(--text-secondary);
+      max-height: 180px;
       overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .adv-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .danger-zone {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--danger-border);
+      border-radius: 8px;
+      background: var(--danger-bg);
+    }
+
+    /* Fallback Login Overlay (Fluent Light) */
+    #login-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(17, 24, 39, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      padding: 16px;
+    }
+    .login-box {
+      width: 420px;
+      max-width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 26px;
+      box-shadow: 0 12px 32px rgba(17, 24, 39, 0.16);
+    }
+    .login-box h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    @media (max-width: 560px) {
+      .wizard-card { padding: 20px 18px; }
+      .mode-choices { grid-template-columns: 1fr; }
+      header[role="banner"] { padding: 0 14px; }
     }
   </style>
 </head>
 <body>
-  <div id="login-overlay" class="hidden">
+  <!-- Fallback Local Owner Sign-In Overlay (Hidden by default; Open-SetupCenter.cmd handles automatic handoff) -->
+  <div id="login-overlay" class="hidden" role="dialog" aria-modal="true" aria-labelledby="login-title">
     <div class="login-box">
-      <h2 id="login-title">WinOwner Setup Center — Local Owner Sign-In</h2>
-      <p id="login-desc" style="font-size:12px; color:var(--muted);">
-        Fallback sign-in (direct browser visit or expired launcher ticket). Use <strong>Open-SetupCenter.cmd</strong> to sign in automatically with zero manual key entry.
+      <h2 id="login-title">WinOwner Setup Center — Đăng nhập chủ máy</h2>
+      <p id="login-desc" style="font-size:13px; color:var(--text-secondary); margin:0 0 14px;">
+        Mở bằng <strong>Open-SetupCenter.cmd</strong> để tự động đăng nhập mà không cần nhập khóa thủ công.
       </p>
-      <label for="owner-password" id="login-label">Owner Console Secret / Admin Key</label>
-      <input type="password" id="owner-password" placeholder="Enter local owner secret" autocomplete="current-password" />
-      <div id="login-error" style="color: var(--danger); font-size: 12px; margin-bottom: 8px;"></div>
-      <button class="primary" style="width:100%; text-align:center;" onclick="loginSetupCenter()" id="login-btn">Sign In</button>
+      <div class="field-group">
+        <label class="field-label" for="owner-password" id="login-label">Khóa quản trị cục bộ</label>
+        <input type="password" id="owner-password" placeholder="Nhập khóa quản trị" autocomplete="current-password" />
+      </div>
+      <div id="login-error" role="alert" style="color: var(--danger-text); font-size: 12.5px; margin-bottom: 10px;"></div>
+      <button type="button" class="btn btn-primary btn-full" id="login-btn">Đăng nhập</button>
     </div>
   </div>
 
-  <header>
-    <div class="brand">
-      <span id="hdr-title">WinOwner Setup Center</span>
-      <span id="hdr-state-pill" class="pill blue">LOCAL_READY</span>
+  <!-- Top Bar (56px, low visual weight) -->
+  <header role="banner" aria-label="WinOwner Setup Center">
+    <div class="brand-group">
+      <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="0" y="0" width="24" height="24" rx="6" fill="#0067c0"></rect>
+        <path d="M12 4.5L6.5 7V11.6C6.5 15.1 8.85 18.25 12 19.3C15.15 18.25 17.5 15.1 17.5 11.6V7L12 4.5Z" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linejoin="round"></path>
+        <circle cx="12" cy="11.5" r="2.1" fill="#ffffff"></circle>
+      </svg>
+      <span class="brand-name" id="brand-wordmark">WinOwner MCP</span>
+      <span class="brand-ver" id="brand-ver-tag">v1.2</span>
+      <span class="sr-only" id="hdr-title">Trung tâm Thiết lập WinOwner</span>
     </div>
-    <div style="display:flex; gap:8px; align-items:center;">
-      <button onclick="toggleLanguage()" id="lang-toggle-btn" style="text-align:center;">VI / EN</button>
-      <button onclick="refreshSetupState()" id="refresh-btn" style="text-align:center;">Refresh</button>
-      <button class="danger" onclick="runEmergencyStopToggle()" id="estop-btn" style="text-align:center;">Emergency Stop</button>
-      <a href="/console" style="color:var(--accent); text-decoration:none; font-size:13px; padding:6px 10px;" id="adv-console-link">Advanced Mode B Console</a>
-      <button onclick="logoutSetupCenter()" id="logout-btn" style="text-align:center;">Logout</button>
+    <div class="topbar-controls">
+      <button type="button" class="lang-toggle" id="lang-toggle-btn" aria-label="Switch language VI or EN">
+        <span class="lang-seg active" id="lang-seg-vi">VI</span>
+        <span class="lang-seg" id="lang-seg-en">EN</span>
+      </button>
+      <button type="button" class="btn-ghost-top" id="btn-advanced-settings" aria-haspopup="dialog" aria-controls="advanced-drawer">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        <span id="lbl-advanced-btn">Cài đặt nâng cao</span>
+      </button>
     </div>
   </header>
 
-  <div class="container">
-    <!-- 4-Step State Machine Progression -->
-    <div class="card col-12">
-      <h2 id="sec-progress-title">Four-Step Connection &amp; Owner Control State</h2>
-      <div class="stepper" id="stepper-container"></div>
-      <div class="guidance-banner" id="guidance-text">Loading live status...</div>
-    </div>
+  <div class="top-progress-wrap hidden" id="top-progress-wrap" aria-hidden="true">
+    <div class="top-progress-bar"></div>
+  </div>
 
-    <!-- Main 6-Row Live Status Table -->
-    <div class="card col-7">
-      <h2 id="sec-table-title">System &amp; Security Live Status</h2>
-      <table class="status-table" aria-label="WinOwner Setup Center Status Table">
-        <thead>
-          <tr>
-            <th id="th-component">Component</th>
-            <th id="th-status">Live Status</th>
-            <th id="th-detail">Verified Detail</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td id="lbl-local-service">Local Service</td>
-            <td><span id="val-local-service" class="pill">...</span></td>
-            <td id="det-local-service" style="font-size:12px; color:var(--muted);">127.0.0.1 loopback + HTTP 401 anonymous block</td>
-          </tr>
-          <tr>
-            <td id="lbl-tunnel">Tunnel</td>
-            <td><span id="val-tunnel" class="pill">...</span></td>
-            <td id="det-tunnel" style="font-size:12px; color:var(--muted);">OpenAI tunnel-client local readiness</td>
-          </tr>
-          <tr>
-            <td id="lbl-chatgpt">ChatGPT</td>
-            <td><span id="val-chatgpt" class="pill">...</span></td>
-            <td id="det-chatgpt" style="font-size:12px; color:var(--muted);">Requires real verified read-only MCP tool call</td>
-          </tr>
-          <tr>
-            <td id="lbl-owner">Owner Identity</td>
-            <td><span id="val-owner" class="pill">...</span></td>
-            <td id="det-owner" style="font-size:12px; color:var(--muted);">Verifiable OAuth 2.1 client pairing</td>
-          </tr>
-          <tr>
-            <td id="lbl-permissions">Permissions</td>
-            <td><span id="val-permissions" class="pill">...</span></td>
-            <td id="det-permissions" style="font-size:12px; color:var(--muted);">Effective backend policy &amp; grant intersection</td>
-          </tr>
-          <tr>
-            <td id="lbl-version">Version</td>
-            <td><span id="val-version" class="pill">...</span></td>
-            <td id="det-version" style="font-size:12px; color:var(--muted);">v1.2.0</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+  <!-- Centered 4-Step Wizard -->
+  <div class="wizard-shell">
+    <nav class="stepper" id="stepper-container" aria-label="Onboarding steps"></nav>
 
-    <!-- 8 Primary Actions -->
-    <div class="card col-5">
-      <h2 id="sec-actions-title">Setup Center Actions</h2>
-      <div class="actions-grid">
-        <button class="primary" onclick="runInstallRepair()" id="btn-install-repair">1. Install / Repair</button>
-        <button class="primary" onclick="showPanel('panel-connect')" id="btn-connect-chatgpt">2. Connect ChatGPT</button>
-        <button class="success" onclick="runVerifyConnection()" id="btn-verify-conn">3. Verify Connection</button>
-        <button class="warn" onclick="showPanel('panel-pairing')" id="btn-review-owner">4. Review Owner Access</button>
-        <button class="danger" onclick="runRevokeAccess()" id="btn-revoke-access">5. Revoke Access</button>
-        <button onclick="showPanel('panel-reconfig')" id="btn-reconfig-tunnel">6. Reconfigure Tunnel</button>
-        <button onclick="runCheckUpdates()" id="btn-check-updates">7. Check for Updates</button>
-        <button class="danger" onclick="runUninstall()" id="btn-uninstall">8. Uninstall</button>
-      </div>
-      <pre id="action-result-box">Select an action above. Raw secrets and tokens are never displayed.</pre>
-    </div>
+    <main class="wizard-card" id="wizard-main" data-ui-state="loading">
+      <!-- Dynamic Lifecycle Banner (emergency_stopped / revoked / expired / offline / reconnecting) -->
+      <div id="state-alert-banner" class="hidden"></div>
 
-    <!-- Action Drawer: Connect ChatGPT / Reconfigure Tunnel -->
-    <div class="card col-12 hidden" id="panel-connect">
-      <h2 id="panel-connect-title">Connect ChatGPT over Private Tunnel</h2>
-      <p id="panel-connect-note" style="font-size:13px; color:var(--muted);">
-        Enter your OpenAI Tunnel ID (tunnel_...) and Runtime API Key. The key is stored locally with Windows owner-only ACLs and is never echoed or logged. Note: Authentication: None in ChatGPT is strictly Read-Only; Owner permissions require OAuth 2.1 verifiable client pairing.
-      </p>
-      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px;">
-        <div>
-          <label for="input-tunnel-id">OpenAI Tunnel ID</label>
-          <input type="text" id="input-tunnel-id" placeholder="tunnel_..." />
-        </div>
-        <div>
-          <label for="input-runtime-key">Runtime API Key (Hidden — Never Displayed)</label>
-          <input type="password" id="input-runtime-key" placeholder="Enter Runtime API Key (Tunnels Read + Use)" autocomplete="off" />
-        </div>
-        <div>
-          <label for="input-auth-mode">Connection Mode</label>
-          <select id="input-auth-mode">
-            <option value="oauth" selected>OAuth 2.1 (Recommended — Supports Owner Pairing)</option>
-            <option value="auth_none">Authentication: None (Strictly Read-Only)</option>
-          </select>
-        </div>
-      </div>
-      <div style="display:flex; gap:10px;">
-        <button class="primary" onclick="submitConnectChatGPT(false)" id="btn-submit-connect">Save &amp; Start Tunnel</button>
-        <button onclick="hidePanels()">Close</button>
-      </div>
-    </div>
+      <!-- Initial Loading View -->
+      <section id="view-loading" class="loading-panel" aria-live="polite">
+        <span class="spinner lg" aria-hidden="true"></span>
+        <div id="loading-text" style="font-weight:500;">Đang kiểm tra trạng thái máy tính...</div>
+      </section>
 
-    <div class="card col-12 hidden" id="panel-reconfig">
-      <h2 id="panel-reconfig-title">Safe Tunnel Reconfiguration (Backup -> Validate -> Cutover -> Auto-Rollback)</h2>
-      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px;">
-        <div>
-          <label for="reconfig-tunnel-id">New OpenAI Tunnel ID</label>
-          <input type="text" id="reconfig-tunnel-id" placeholder="tunnel_..." />
+      <!-- STEP 1: CÀI ĐẶT / SETUP -->
+      <section id="step-view-1" class="hidden">
+        <div class="card-header">
+          <h1 class="step-title" id="s1-title">Chuẩn bị máy tính của bạn</h1>
+          <p class="step-subtitle" id="s1-subtitle">WinOwner đang kiểm tra nhanh các thành phần cần thiết trên máy.</p>
         </div>
-        <div>
-          <label for="reconfig-runtime-key">New Runtime API Key (Hidden)</label>
-          <input type="password" id="reconfig-runtime-key" placeholder="Enter Runtime API Key" autocomplete="off" />
-        </div>
-        <div>
-          <label for="reconfig-auth-mode">Connection Mode</label>
-          <select id="reconfig-auth-mode">
-            <option value="oauth" selected>OAuth 2.1 (Recommended — Supports Owner Pairing)</option>
-            <option value="auth_none">Authentication: None (Strictly Read-Only)</option>
-          </select>
-        </div>
-      </div>
-      <div style="display:flex; gap:10px;">
-        <button class="warn" onclick="submitConnectChatGPT(true)" id="btn-submit-reconfig">Validate &amp; Reconfigure Tunnel</button>
-        <button onclick="hidePanels()">Close</button>
-      </div>
-    </div>
 
-    <!-- Action Drawer: Review Owner Access (Verifiable Pairing Challenges) -->
-    <div class="card col-12" id="panel-pairing">
-      <h2>
-        <span id="sec-pairing-title">Review Owner Access — Pending Verifiable Pairing Requests</span>
-        <button onclick="refreshSetupState()" id="btn-refresh-challenges">Refresh Requests</button>
-      </h2>
-      <div id="unverifiable-notice" class="guidance-banner hidden"></div>
-      <div id="challenges-container"></div>
+        <div id="s1-alert" class="hidden" role="alert"></div>
+
+        <div class="check-list" aria-live="polite">
+          <div class="check-row">
+            <span class="check-row-left" id="s1-chk1-lbl">Thành phần chạy cục bộ</span>
+            <span class="check-badge wait" id="s1-chk1-val">Đang kiểm tra</span>
+          </div>
+          <div class="check-row">
+            <span class="check-row-left" id="s1-chk2-lbl">Dịch vụ nền WinOwner</span>
+            <span class="check-badge wait" id="s1-chk2-val">Đang kiểm tra</span>
+          </div>
+          <div class="check-row">
+            <span class="check-row-left" id="s1-chk3-lbl">Cấu hình bảo mật cục bộ</span>
+            <span class="check-badge wait" id="s1-chk3-val">Đang kiểm tra</span>
+          </div>
+        </div>
+
+        <div id="s1-ready-banner" class="callout success hidden" aria-live="polite">
+          <span class="callout-icon" aria-hidden="true">✓</span>
+          <div class="callout-body">
+            <div class="callout-title" id="s1-ready-text">Máy tính đã sẵn sàng</div>
+          </div>
+        </div>
+
+        <details class="fluent-details hidden" id="s1-error-details">
+          <summary id="s1-error-summary">Xem chi tiết lỗi</summary>
+          <div class="details-error-text" id="s1-error-detail-text"></div>
+        </details>
+
+        <div class="btn-row">
+          <button type="button" class="btn btn-primary" id="btn-s1-primary">Tiếp tục</button>
+        </div>
+      </section>
+
+      <!-- STEP 2: KẾT NỐI CHATGPT / CONNECT -->
+      <section id="step-view-2" class="hidden">
+        <div class="card-header">
+          <h1 class="step-title" id="s2-title">Kết nối máy tính với ChatGPT</h1>
+          <p class="step-subtitle" id="s2-subtitle">Nhập thông tin đường truyền riêng để máy tính kết nối an toàn với ChatGPT.</p>
+        </div>
+
+        <!-- Sub-phase 2A: Enter Credentials -->
+        <div id="s2-form-pane">
+          <div id="s2-connecting-banner" class="callout info hidden" aria-live="polite">
+            <span class="spinner" aria-hidden="true"></span>
+            <div class="callout-body">
+              <div class="callout-title" id="s2-connecting-text">Kết nối đang được thiết lập...</div>
+            </div>
+          </div>
+
+          <div id="s2-error-alert" class="callout danger hidden" role="alert">
+            <span class="callout-icon" aria-hidden="true">✕</span>
+            <div class="callout-body">
+              <div class="callout-title" id="s2-error-title">Chưa thể kết nối. Vui lòng thử lại.</div>
+              <p class="callout-desc" id="s2-error-hint"></p>
+            </div>
+          </div>
+
+          <details class="fluent-details hidden" id="s2-error-details">
+            <summary id="s2-error-summary">Xem chi tiết lỗi</summary>
+            <div class="details-error-text" id="s2-error-detail-text"></div>
+          </details>
+
+          <form id="connect-form" novalidate>
+            <div class="field-group">
+              <label class="field-label" for="input-tunnel-id" id="lbl-tunnel-id">Tunnel ID</label>
+              <input type="text" id="input-tunnel-id" class="mono-input" placeholder="tunnel_..." autocomplete="off" spellcheck="false" />
+              <div class="field-hint" id="hint-tunnel-id">Dán mã bắt đầu bằng tunnel_ từ trang OpenAI Tunnels.</div>
+            </div>
+
+            <div class="field-group">
+              <label class="field-label" for="input-runtime-key" id="lbl-api-key">API Key</label>
+              <div class="input-wrap">
+                <input type="password" id="input-runtime-key" class="has-eye" placeholder="Nhập API Key của bạn" autocomplete="off" />
+                <button type="button" class="input-eye-btn" id="btn-toggle-key-vis">Hiện</button>
+              </div>
+              <div class="field-hint" id="hint-api-key">Khóa chỉ lưu bảo mật trên máy của bạn và không bao giờ hiển thị lại.</div>
+            </div>
+
+            <div class="field-group">
+              <span class="field-label" id="lbl-access-mode">Mức truy cập ban đầu</span>
+              <div class="mode-choices" role="radiogroup" aria-labelledby="lbl-access-mode">
+                <label class="mode-card" id="mode-card-readonly">
+                  <input type="radio" name="connect_auth_mode" id="mode-radio-auth-none" value="auth_none" />
+                  <div>
+                    <div class="mode-card-title" id="mode-readonly-title">Chỉ xem (mặc định)</div>
+                    <div class="mode-card-desc" id="mode-readonly-desc">Chỉ đọc thông tin an toàn, không thay đổi tệp.</div>
+                  </div>
+                </label>
+                <label class="mode-card selected" id="mode-card-confirm">
+                  <input type="radio" name="connect_auth_mode" id="mode-radio-oauth" value="oauth" checked />
+                  <div>
+                    <div class="mode-card-title" id="mode-confirm-title">Cho phép thao tác khi tôi xác nhận</div>
+                    <div class="mode-card-desc" id="mode-confirm-desc">Có thể cấp quyền làm việc sau khi bạn xác nhận ở bước kế tiếp.</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <details class="fluent-details" id="s2-guide-details">
+              <summary id="s2-guide-summary">Xem hướng dẫn lấy Tunnel ID và API Key</summary>
+              <ol id="s2-guide-list">
+                <li id="s2-guide-1">Mở trang OpenAI API Keys để tạo một khóa riêng cho máy tính này.</li>
+                <li id="s2-guide-2">Mở trang OpenAI Tunnels, tạo Tunnel mới và sao chép mã Tunnel ID.</li>
+                <li id="s2-guide-3">Dán cả hai vào biểu mẫu trên rồi bấm Kết nối và tiếp tục.</li>
+              </ol>
+              <div style="display:flex; gap:12px; margin-top:6px; font-size:12.5px;">
+                <a href="https://platform.openai.com/settings/organization/api-keys" target="_blank" rel="noopener noreferrer" style="color:var(--accent);" id="lnk-openai-keys">Mở OpenAI API Keys ↗</a>
+                <a href="https://platform.openai.com/settings/organization/tunnels" target="_blank" rel="noopener noreferrer" style="color:var(--accent);" id="lnk-openai-tunnels">Mở OpenAI Tunnels ↗</a>
+              </div>
+            </details>
+
+            <div class="btn-row">
+              <button type="submit" class="btn btn-primary" id="btn-submit-connect">Kết nối và tiếp tục</button>
+              <button type="button" class="btn btn-link hidden" id="btn-cancel-change-tunnel">Quay lại kiểm tra</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Sub-phase 2B: Verify Real ChatGPT Tool Call -->
+        <div id="s2-verify-pane" class="hidden">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; gap:8px; flex-wrap:wrap;">
+            <span class="pill green"><span class="dot"></span><span id="s2b-badge">Đường truyền đã kết nối</span></span>
+            <button type="button" class="btn btn-link btn-sm" id="btn-change-tunnel">Đổi thông tin kết nối</button>
+          </div>
+
+          <div class="subtle-box">
+            <div style="font-size:13.5px; font-weight:600; margin-bottom:6px;" id="s2b-step1-title">1. Thêm ứng dụng WinOwner trong ChatGPT</div>
+            <div style="font-size:13px; color:var(--text-secondary); margin-bottom:10px;" id="s2b-step1-desc">
+              Mở mục Plugins trong ChatGPT và thêm ứng dụng WinOwner bằng Tunnel ID bạn vừa kết nối.
+            </div>
+            <a href="https://chatgpt.com/plugins" target="_blank" rel="noopener noreferrer" class="btn btn-sm" id="btn-open-chatgpt-plugins">Mở ChatGPT ↗</a>
+
+            <div style="font-size:13.5px; font-weight:600; margin:12px 0 4px;" id="s2b-step2-title">2. Gửi câu lệnh thử này trong ChatGPT để xác minh</div>
+            <div class="prompt-row">
+              <span class="prompt-text" id="s2b-test-prompt">Kiểm tra cấu hình máy tính và dung lượng ổ đĩa của tôi</span>
+              <button type="button" class="btn btn-sm" id="btn-copy-verify-prompt">Sao chép</button>
+            </div>
+          </div>
+
+          <div class="callout info" id="s2b-wait-box" aria-live="polite">
+            <span class="spinner" aria-hidden="true"></span>
+            <div class="callout-body">
+              <div class="callout-title" id="s2b-wait-text">Đang chờ phản hồi đầu tiên từ ChatGPT...</div>
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary" id="btn-verify-conn">Kiểm tra kết nối</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 3: XÁC NHẬN QUYỀN / AUTHORIZE -->
+      <section id="step-view-3" class="hidden">
+        <div class="card-header">
+          <h1 class="step-title" id="s3-title">Cho phép ChatGPT sử dụng máy tính</h1>
+          <p class="step-subtitle" id="s3-subtitle">Kiểm tra kỹ phạm vi trước khi xác nhận. Bạn luôn có thể thu hồi bất cứ lúc nào.</p>
+        </div>
+
+        <div id="s3-error-alert" class="callout danger hidden" role="alert">
+          <span class="callout-icon" aria-hidden="true">✕</span>
+          <div class="callout-body">
+            <div class="callout-title" id="s3-error-text"></div>
+          </div>
+        </div>
+
+        <!-- Sub-state 3A: Pending Authorization Request -->
+        <div id="s3-pending-pane" class="hidden">
+          <div id="challenges-container"></div>
+        </div>
+
+        <!-- Sub-state 3B: Waiting or Read-Only Mode -->
+        <div id="s3-empty-pane" class="hidden">
+          <div class="callout info" id="s3-info-callout" aria-live="polite">
+            <span class="callout-icon" id="s3-info-icon" aria-hidden="true">ℹ</span>
+            <div class="callout-body">
+              <div class="callout-title" id="s3-info-title">Đang chờ yêu cầu xác nhận từ ChatGPT...</div>
+              <p class="callout-desc" id="s3-info-desc"></p>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary" id="btn-s3-primary">Kiểm tra yêu cầu</button>
+            <button type="button" class="btn btn-link" id="btn-s3-secondary">Dùng chế độ Chỉ xem</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 4: SẴN SÀNG SỬ DỤNG / READY -->
+      <section id="step-view-4" class="hidden">
+        <div class="card-header">
+          <div class="card-header-row">
+            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" id="s4-header-icon">
+              <circle cx="12" cy="12" r="10" fill="#15803d"></circle>
+              <path d="M8 12.2l2.6 2.6L16.4 9" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+            <h1 class="step-title" id="s4-title">Máy tính của bạn đã kết nối!</h1>
+          </div>
+          <p class="step-subtitle" id="s4-subtitle">Bạn có thể mở ChatGPT và bắt đầu sử dụng ngay bây giờ.</p>
+        </div>
+
+        <div class="truth-strip">
+          <div class="truth-item">
+            <span id="s4-lbl-conn">Trạng thái:</span>
+            <span class="pill green" id="s4-pill-conn"><span class="dot"></span><span id="s4-val-conn">Đã kết nối</span></span>
+          </div>
+          <div class="truth-item">
+            <span id="s4-lbl-perm">Quyền hiện tại:</span>
+            <span class="pill blue" id="s4-pill-perm">Chỉ xem (An toàn)</span>
+          </div>
+        </div>
+
+        <div id="s4-test-feedback" class="callout hidden" aria-live="polite"></div>
+
+        <div class="btn-row" style="margin-top:0;">
+          <a href="https://chatgpt.com" target="_blank" rel="noopener noreferrer" class="btn btn-primary" id="btn-open-chatgpt">Mở ChatGPT</a>
+          <button type="button" class="btn" id="btn-test-conn">Thử kết nối</button>
+        </div>
+
+        <div class="examples-heading" id="s4-examples-title">Gợi ý câu lệnh an toàn để thử ngay:</div>
+        <div id="s4-examples-list">
+          <div class="prompt-row">
+            <span class="prompt-text" id="ex-prompt-1">Kiểm tra cấu hình hệ thống (CPU, RAM)</span>
+            <button type="button" class="btn btn-sm" data-copy-target="ex-prompt-1">Sao chép</button>
+          </div>
+          <div class="prompt-row">
+            <span class="prompt-text" id="ex-prompt-2">Xem dung lượng trống của các ổ đĩa</span>
+            <button type="button" class="btn btn-sm" data-copy-target="ex-prompt-2">Sao chép</button>
+          </div>
+          <div class="prompt-row">
+            <span class="prompt-text" id="ex-prompt-3">Đọc một tệp trong thư mục đã cấp quyền</span>
+            <button type="button" class="btn btn-sm" data-copy-target="ex-prompt-3">Sao chép</button>
+          </div>
+        </div>
+
+        <div class="safety-footer">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="btn btn-sm" id="btn-revoke-inline">Quản lý / Thu hồi quyền</button>
+            <span id="revoke-confirm-wrap" class="hidden" style="display:inline-flex; align-items:center; gap:6px;">
+              <button type="button" class="btn btn-danger btn-sm" id="btn-revoke-confirm">Xác nhận thu hồi</button>
+              <button type="button" class="btn btn-sm" id="btn-revoke-cancel">Hủy</button>
+            </span>
+          </div>
+          <button type="button" class="btn btn-danger-outline btn-sm" id="btn-estop-footer">Emergency Stop</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- PHASE D: Slide-Over Advanced Settings Drawer (Hidden during normal onboarding) -->
+  <div class="drawer-backdrop hidden" id="advanced-drawer" role="dialog" aria-modal="true" aria-labelledby="adv-drawer-title">
+    <div class="drawer-panel">
+      <div class="drawer-header">
+        <h2 class="drawer-title" id="adv-drawer-title">Cài đặt nâng cao</h2>
+        <button type="button" class="btn btn-sm" id="btn-close-advanced" aria-label="Close">✕</button>
+      </div>
+      <div class="drawer-body">
+        <div id="adv-feedback" class="callout hidden" aria-live="polite"></div>
+
+        <!-- Section 1: Diagnostics & 6-Row Live Status Table -->
+        <div class="adv-section">
+          <h3 class="adv-section-title">
+            <span id="adv-sec-diag">Chẩn đoán &amp; Trạng thái dịch vụ</span>
+            <button type="button" class="btn btn-sm" id="btn-adv-refresh">Làm mới</button>
+          </h3>
+          <table class="adv-table" aria-label="WinOwner Setup Center Status Table">
+            <thead>
+              <tr>
+                <th id="th-component">Thành phần</th>
+                <th id="th-status">Trạng thái</th>
+                <th id="th-detail">Chi tiết</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="lbl-local-service">Local Service</td>
+                <td><span id="val-local-service" class="pill">...</span></td>
+                <td id="det-local-service" style="color:var(--text-muted);">...</td>
+              </tr>
+              <tr>
+                <td id="lbl-tunnel">Tunnel</td>
+                <td><span id="val-tunnel" class="pill">...</span></td>
+                <td id="det-tunnel" style="color:var(--text-muted);">...</td>
+              </tr>
+              <tr>
+                <td id="lbl-chatgpt">ChatGPT</td>
+                <td><span id="val-chatgpt" class="pill">...</span></td>
+                <td id="det-chatgpt" style="color:var(--text-muted);">...</td>
+              </tr>
+              <tr>
+                <td id="lbl-owner">Owner Identity</td>
+                <td><span id="val-owner" class="pill">...</span></td>
+                <td id="det-owner" style="color:var(--text-muted);">...</td>
+              </tr>
+              <tr>
+                <td id="lbl-permissions">Permissions</td>
+                <td><span id="val-permissions" class="pill">...</span></td>
+                <td id="det-permissions" style="color:var(--text-muted);">...</td>
+              </tr>
+              <tr>
+                <td id="lbl-version">Version</td>
+                <td><span id="val-version" class="pill">...</span></td>
+                <td id="det-version" style="color:var(--text-muted);">v1.2.0</td>
+              </tr>
+            </tbody>
+          </table>
+          <div id="adv-guidance-box" style="margin-top:8px; font-size:12px; color:var(--text-secondary);"></div>
+          <div style="margin-top:8px;">
+            <a href="/console" style="color:var(--accent); font-size:12.5px; font-weight:600; text-decoration:none;" id="adv-console-link">Mở bảng điều khiển Mode B (/console) ↗</a>
+          </div>
+        </div>
+
+        <!-- Section 2: Redacted Logs -->
+        <div class="adv-section">
+          <h3 class="adv-section-title">
+            <span id="adv-sec-logs">Nhật ký hệ thống (đã ẩn bí mật)</span>
+            <span style="display:flex; gap:6px;">
+              <button type="button" class="btn btn-sm" id="btn-adv-load-logs">Tải nhật ký</button>
+              <button type="button" class="btn btn-sm" id="btn-adv-copy-logs">Sao chép</button>
+            </span>
+          </h3>
+          <div class="adv-logs" id="adv-logs-box">Chưa tải nhật ký.</div>
+        </div>
+
+        <!-- Section 3: Repair, Updates & Rollback -->
+        <div class="adv-section">
+          <h3 class="adv-section-title" id="adv-sec-maint">Bảo trì, Cập nhật &amp; Khôi phục</h3>
+          <div id="adv-version-meta" style="font-size:12.5px; color:var(--text-secondary); margin-bottom:8px;"></div>
+          <div class="adv-action-row">
+            <button type="button" class="btn btn-sm" id="btn-adv-repair">Sửa chữa dịch vụ</button>
+            <button type="button" class="btn btn-sm" id="btn-adv-updates">Kiểm tra cập nhật</button>
+            <button type="button" class="btn btn-sm" id="btn-adv-rollback">Khôi phục bản trước (Rollback)</button>
+          </div>
+        </div>
+
+        <!-- Section 4: Reconfigure Tunnel, Session & Uninstall -->
+        <div class="adv-section">
+          <h3 class="adv-section-title" id="adv-sec-reconfig">Cấu hình lại Tunnel</h3>
+          <div id="reconfig-error-alert" class="callout danger hidden" role="alert">
+            <span class="callout-icon" aria-hidden="true">✕</span>
+            <div class="callout-body" id="reconfig-error-text"></div>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="reconfig-tunnel-id" id="lbl-reconfig-tid">Tunnel ID mới</label>
+            <input type="text" id="reconfig-tunnel-id" class="mono-input" placeholder="tunnel_..." autocomplete="off" />
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="reconfig-runtime-key" id="lbl-reconfig-key">API Key mới</label>
+            <input type="password" id="reconfig-runtime-key" placeholder="Nhập API Key" autocomplete="off" />
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="reconfig-auth-mode" id="lbl-reconfig-mode">Chế độ kết nối</label>
+            <select id="reconfig-auth-mode">
+              <option value="oauth" selected>Cho phép thao tác khi tôi xác nhận (OAuth 2.1)</option>
+              <option value="auth_none">Chỉ xem (Authentication: None)</option>
+            </select>
+          </div>
+          <div class="adv-action-row">
+            <button type="button" class="btn btn-primary btn-sm" id="btn-submit-reconfig">Cấu hình lại Tunnel</button>
+          </div>
+
+          <div class="adv-action-row" style="margin-top:14px;">
+            <button type="button" class="btn btn-sm" id="btn-adv-revoke">Thu hồi toàn bộ quyền</button>
+            <button type="button" class="btn btn-danger-outline btn-sm" id="btn-adv-estop">Emergency Stop</button>
+            <button type="button" class="btn btn-sm" id="btn-adv-logout">Đăng xuất</button>
+          </div>
+
+          <div class="danger-zone">
+            <div style="font-size:13px; font-weight:600; color:var(--danger-text); margin-bottom:4px;" id="adv-uninstall-title">Gỡ cài đặt dịch vụ cục bộ</div>
+            <div style="font-size:12px; color:var(--text-secondary); margin-bottom:8px;" id="adv-uninstall-desc">Dừng và gỡ các dịch vụ nền đã xác minh. Dữ liệu cá nhân và khóa cục bộ vẫn được giữ nguyên.</div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button type="button" class="btn btn-danger-outline btn-sm" id="btn-adv-uninstall">Gỡ cài đặt</button>
+              <span id="uninstall-confirm-wrap" class="hidden" style="display:inline-flex; gap:6px;">
+                <button type="button" class="btn btn-danger btn-sm" id="btn-adv-uninstall-confirm">Xác nhận gỡ cài đặt</button>
+                <button type="button" class="btn btn-sm" id="btn-adv-uninstall-cancel">Hủy</button>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -862,110 +1978,390 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
     let csrfToken = null;
     let currentLang = 'vi';
     let latestState = null;
+    let uiOverrideState = null; // 'loading' | 'connecting' | 'connection_failed' | 'reconnecting' | 'offline' | null
+    let manualStepView = null;  // 1 | 2 | 3 | 4 | null
+    let forceStep2Form = false;
+    let step1AutoAdvanced = false;
+    let connectErrorDetail = '';
+    let step1ErrorDetail = '';
+    let pollTimer = null;
+    let reconnectFailures = 0;
 
     const I18N = {
-      en: {
-        hdrTitle: 'WinOwner Setup Center',
-        secProgress: 'Four-Step Connection & Owner Control State',
-        secTable: 'System & Security Live Status',
-        thComponent: 'Component',
-        thStatus: 'Live Status',
-        thDetail: 'Verified Detail',
-        lblLocal: 'Local Service',
-        lblTunnel: 'Tunnel',
-        lblChatgpt: 'ChatGPT',
-        lblOwner: 'Owner Identity',
-        lblPerm: 'Permissions',
-        lblVer: 'Version',
-        secActions: 'Setup Center Actions',
-        btnInstall: '1. Install / Repair',
-        btnConnect: '2. Connect ChatGPT',
-        btnVerify: '3. Verify Connection',
-        btnReview: '4. Review Owner Access',
-        btnRevoke: '5. Revoke Access',
-        btnReconfig: '6. Reconfigure Tunnel',
-        btnUpdates: '7. Check for Updates',
-        btnUninstall: '8. Uninstall',
-        secPairing: 'Review Owner Access — Pending Verifiable Pairing Requests',
-        noPending: 'No pending owner pairing requests. When an OAuth 2.1 ChatGPT client requests owner access, it will appear here with its verification code for your one-click approval.',
-        confirmOwnerBtn: 'Confirm Owner Access',
-        denyBtn: 'Deny Request',
-        estopBtn: 'Emergency Stop',
-        estopResetBtn: 'Reset Emergency Stop'
-      },
       vi: {
         hdrTitle: 'Trung tâm Thiết lập WinOwner',
-        secProgress: 'Trạng thái 4 Bước Kết nối & Quyền Chủ máy',
-        secTable: 'Bảng Trạng thái Hệ thống & Bảo mật Trực tiếp',
-        thComponent: 'Hạng mục',
-        thStatus: 'Trạng thái',
-        thDetail: 'Chi tiết xác minh',
-        lblLocal: 'Local Service (Dịch vụ máy)',
-        lblTunnel: 'Tunnel (Đường truyền riêng)',
-        lblChatgpt: 'ChatGPT',
-        lblOwner: 'Owner Identity (Danh tính chủ máy)',
-        lblPerm: 'Permissions (Quyền hạn thực tế)',
-        lblVer: 'Version (Phiên bản)',
-        secActions: 'Thao tác Quản trị',
-        btnInstall: '1. Cài đặt / Sửa chữa (Install / Repair)',
-        btnConnect: '2. Kết nối ChatGPT (Connect ChatGPT)',
-        btnVerify: '3. Xác minh kết nối (Verify Connection)',
-        btnReview: '4. Duyệt quyền Chủ máy (Review Owner Access)',
-        btnRevoke: '5. Thu hồi quyền (Revoke Access)',
-        btnReconfig: '6. Cấu hình lại Tunnel (Reconfigure Tunnel)',
-        btnUpdates: '7. Kiểm tra cập nhật (Check for Updates)',
-        btnUninstall: '8. Gỡ cài đặt (Uninstall)',
-        secPairing: 'Duyệt quyền Chủ máy — Yêu cầu ghép nối có xác minh đang chờ',
-        noPending: 'Không có yêu cầu ghép nối chủ máy nào đang chờ. Khi client ChatGPT OAuth 2.1 yêu cầu quyền chủ máy, thông tin và mã xác nhận sẽ hiển thị tại đây để bạn xác nhận một lần.',
+        advBtn: 'Cài đặt nâng cao',
+        steps: ['Cài đặt', 'Kết nối', 'Xác nhận quyền', 'Sẵn sàng'],
+        loadingText: 'Đang kiểm tra trạng thái máy tính...',
+        s1Title: 'Chuẩn bị máy tính của bạn',
+        s1Subtitle: 'WinOwner đang kiểm tra nhanh các thành phần cần thiết trên máy.',
+        s1Chk1: 'Thành phần chạy cục bộ',
+        s1Chk2: 'Dịch vụ nền WinOwner',
+        s1Chk3: 'Cấu hình bảo mật cục bộ',
+        chkOk: 'Sẵn sàng',
+        chkFail: 'Cần sửa chữa',
+        chkWait: 'Đang kiểm tra',
+        s1Ready: 'Máy tính đã sẵn sàng',
+        s1FailTitle: 'Một số thành phần chưa sẵn sàng.',
+        s1FailDesc: 'Nhấn Thử lại / Sửa chữa để WinOwner tự động khắc phục.',
+        s1BtnContinue: 'Tiếp tục',
+        s1BtnRepair: 'Thử lại / Sửa chữa',
+        s1BtnRepairing: 'Đang sửa chữa...',
+        viewErrDetails: 'Xem chi tiết lỗi',
+        s2Title: 'Kết nối máy tính với ChatGPT',
+        s2Subtitle: 'Nhập thông tin đường truyền riêng để máy tính kết nối an toàn với ChatGPT.',
+        s2Connecting: 'Kết nối đang được thiết lập...',
+        s2ErrorTitle: 'Chưa thể kết nối. Vui lòng thử lại.',
+        s2ErrorHint: 'Kiểm tra lại Tunnel ID, API Key và kết nối mạng của bạn.',
+        s2ErrorInvalidTid: 'Mã Tunnel ID chưa đúng định dạng (bắt đầu bằng tunnel_).',
+        s2ErrorInvalidKey: 'Vui lòng nhập API Key hợp lệ.',
+        lblTid: 'Tunnel ID',
+        hintTid: 'Dán mã bắt đầu bằng tunnel_ từ trang OpenAI Tunnels.',
+        lblKey: 'API Key',
+        placeholderKey: 'Nhập API Key của bạn',
+        hintKey: 'Khóa chỉ lưu bảo mật trên máy của bạn và không bao giờ hiển thị lại.',
+        btnShow: 'Hiện',
+        btnHide: 'Ẩn',
+        lblAccessMode: 'Mức truy cập ban đầu',
+        modeRoTitle: 'Chỉ xem (mặc định)',
+        modeRoDesc: 'Chỉ đọc thông tin an toàn, không thay đổi tệp.',
+        modeConfirmTitle: 'Cho phép thao tác khi tôi xác nhận',
+        modeConfirmDesc: 'Cấp quyền làm việc sau khi bạn xác nhận rõ ràng ở bước tiếp theo.',
+        s2GuideSummary: 'Xem hướng dẫn lấy Tunnel ID và API Key',
+        s2Guide1: 'Mở trang OpenAI API Keys để tạo một khóa riêng cho máy tính này.',
+        s2Guide2: 'Mở trang OpenAI Tunnels, tạo đường truyền mới và sao chép Tunnel ID.',
+        s2Guide3: 'Dán cả hai vào biểu mẫu trên rồi bấm Kết nối và tiếp tục.',
+        lnkKeys: 'Mở OpenAI API Keys ↗',
+        lnkTunnels: 'Mở OpenAI Tunnels ↗',
+        btnConnect: 'Kết nối và tiếp tục',
+        btnConnecting: 'Đang kết nối...',
+        btnRetry: 'Thử lại',
+        btnCancelChange: 'Quay lại kiểm tra',
+        s2bBadge: 'Đường truyền đã kết nối',
+        btnChangeTunnel: 'Đổi thông tin kết nối',
+        s2bStep1Title: '1. Thêm ứng dụng WinOwner trong ChatGPT',
+        s2bStep1Desc: 'Mở ChatGPT và kết nối ứng dụng WinOwner bằng Tunnel ID bạn vừa thiết lập.',
+        btnOpenPlugins: 'Mở ChatGPT ↗',
+        s2bStep2Title: '2. Gửi câu lệnh thử này trong ChatGPT để xác minh',
+        s2bTestPrompt: 'Kiểm tra cấu hình máy tính và dung lượng ổ đĩa của tôi',
+        s2bWaitText: 'Đang chờ phản hồi đầu tiên từ ChatGPT...',
+        btnVerifyConn: 'Kiểm tra kết nối',
+        btnVerifying: 'Đang kiểm tra...',
+        s3Title: 'Cho phép ChatGPT sử dụng máy tính',
+        s3Subtitle: 'Kiểm tra kỹ phạm vi trước khi xác nhận. Bạn luôn có thể thu hồi bất cứ lúc nào.',
         confirmOwnerBtn: 'Xác nhận cấp quyền chủ máy',
-        denyBtn: 'Từ chối (Deny)',
-        estopBtn: 'Dừng khẩn cấp (E-Stop)',
-        estopResetBtn: 'Tắt Dừng khẩn cấp'
+        denyBtn: 'Từ chối',
+        s3WaitTitle: 'Đang chờ yêu cầu xác nhận từ ChatGPT...',
+        s3WaitDesc: 'Khi ChatGPT gửi yêu cầu thao tác trên máy tính, thông tin và mã xác nhận sẽ tự động hiện tại đây.',
+        s3RoTitle: 'Đang kết nối ở chế độ Chỉ xem (An toàn)',
+        s3RoDesc: 'ChatGPT hiện chỉ có thể đọc thông tin, không thể sửa tệp hoặc chạy lệnh trên máy tính của bạn.',
+        s3BtnCheck: 'Kiểm tra yêu cầu',
+        s3BtnGoReady: 'Tiếp tục với chế độ Chỉ xem',
+        s3BtnUseRo: 'Dùng chế độ Chỉ xem',
+        s3BtnSwitchControl: 'Đổi sang chế độ cho phép điều khiển',
+        consentCodeLbl: 'Mã xác nhận:',
+        consentAppFallback: 'Ứng dụng ChatGPT',
+        consentScopeFolders: 'Thư mục được chọn',
+        consentScopeFull: 'Toàn quyền chủ máy',
+        consentOpRead: 'Đọc tệp và kiểm tra thông tin hệ thống trong phạm vi đã duyệt.',
+        consentOpWrite: 'Tạo, chỉnh sửa tệp hoặc chạy lệnh trong thư mục được cấp phép.',
+        consentOpSafe: 'Các thao tác phá hủy dữ liệu bị chặn mặc định.',
+        consentOpDestructive: 'Bao gồm thao tác xóa hoặc thay đổi nhạy cảm theo yêu cầu.',
+        consentExpiryTpl: 'Tự động hết hạn sau {dur}. Bạn có thể thu hồi hoặc dừng khẩn cấp bất cứ lúc nào.',
+        s4Title: 'Máy tính của bạn đã kết nối!',
+        s4Subtitle: 'Bạn có thể mở ChatGPT và bắt đầu sử dụng ngay bây giờ.',
+        s4LblConn: 'Trạng thái:',
+        s4ValConn: 'Đã kết nối',
+        s4LblPerm: 'Quyền hiện tại:',
+        permRead: 'Chỉ xem (An toàn)',
+        permScoped: 'Điều khiển theo thư mục',
+        permOwner: 'Toàn quyền chủ máy',
+        btnOpenChatGPT: 'Mở ChatGPT',
+        btnTestConn: 'Thử kết nối',
+        s4TestOk: 'Kết nối hoạt động tốt và đã xác minh phản hồi từ ChatGPT.',
+        s4TestWait: 'Đường truyền sẵn sàng, đang chờ một câu lệnh thử mới từ ChatGPT.',
+        s4ExamplesTitle: 'Gợi ý câu lệnh an toàn để thử ngay:',
+        ex1: 'Kiểm tra cấu hình hệ thống (CPU, RAM)',
+        ex2: 'Xem dung lượng trống của các ổ đĩa',
+        ex3: 'Đọc một tệp trong thư mục đã cấp quyền',
+        btnCopy: 'Sao chép',
+        btnCopied: 'Đã sao chép',
+        btnRevokeInline: 'Quản lý / Thu hồi quyền',
+        btnRevokeConfirm: 'Xác nhận thu hồi',
+        btnCancel: 'Hủy',
+        estopBtn: 'Dừng khẩn cấp (Emergency Stop)',
+        estopResetBtn: 'Tắt Dừng khẩn cấp',
+        stRevokedTitle: 'Quyền truy cập đã được thu hồi. Máy đang ở chế độ Chỉ xem.',
+        stRevokedAction: 'Kết nối & cấp quyền lại',
+        stWaitingAuthTitle: 'Đang chờ bạn xác nhận quyền truy cập',
+        stWaitingAuthAction: 'Xem yêu cầu xác nhận',
+        stExpiredTitle: 'Phiên cấp quyền đã hết hạn để đảm bảo an toàn.',
+        stExpiredAction: 'Xác nhận lại quyền',
+        stEstopTitle: 'Đã bật Dừng khẩn cấp — mọi thao tác điều khiển đã tạm ngưng.',
+        stOfflineTitle: 'Máy tính đang ngoại tuyến hoặc dịch vụ cục bộ không phản hồi.',
+        stOfflineRetry: 'Thử kết nối lại',
+        stOfflineRepair: 'Sửa chữa tự động',
+        stReconnectingTitle: 'Đang tự động kết nối lại...',
+        advTitle: 'Cài đặt nâng cao',
+        advSecDiag: 'Chẩn đoán & Trạng thái dịch vụ',
+        advRefresh: 'Làm mới',
+        thComp: 'Thành phần',
+        thStatus: 'Trạng thái',
+        thDetail: 'Chi tiết',
+        advConsole: 'Mở bảng điều khiển Mode B (/console) ↗',
+        advSecLogs: 'Nhật ký hệ thống (đã ẩn bí mật)',
+        advLoadLogs: 'Tải nhật ký',
+        advLogsEmpty: 'Chưa có mục nhật ký nào.',
+        advSecMaint: 'Bảo trì, Cập nhật & Khôi phục',
+        advRepair: 'Sửa chữa dịch vụ',
+        advUpdates: 'Kiểm tra cập nhật',
+        advRollback: 'Khôi phục bản trước (Rollback)',
+        advRollbackNone: 'Chưa có bản sao lưu để khôi phục.',
+        advSecReconfig: 'Cấu hình lại Tunnel',
+        lblReconfigTid: 'Tunnel ID mới',
+        lblReconfigKey: 'API Key mới',
+        lblReconfigMode: 'Chế độ kết nối',
+        btnReconfig: 'Cấu hình lại Tunnel',
+        advRevoke: 'Thu hồi toàn bộ quyền',
+        advLogout: 'Đăng xuất',
+        advUninstallTitle: 'Gỡ cài đặt dịch vụ cục bộ',
+        advUninstallDesc: 'Dừng và gỡ các dịch vụ nền đã xác minh. Dữ liệu cá nhân và khóa cục bộ vẫn được giữ nguyên.',
+        advUninstallBtn: 'Gỡ cài đặt',
+        advUninstallConfirm: 'Xác nhận gỡ cài đặt',
+        loginTitle: 'Trung tâm Thiết lập WinOwner — Đăng nhập chủ máy',
+        loginDesc: 'Mở bằng Open-SetupCenter.cmd để tự động đăng nhập mà không cần nhập khóa thủ công.',
+        loginLabel: 'Khóa quản trị cục bộ',
+        loginBtn: 'Đăng nhập',
+        minutesUnit: 'phút',
+        hoursUnit: 'giờ'
+      },
+      en: {
+        hdrTitle: 'WinOwner Setup Center',
+        advBtn: 'Advanced Settings',
+        steps: ['Setup', 'Connect', 'Authorize', 'Ready'],
+        loadingText: 'Checking computer status...',
+        s1Title: 'Preparing your computer',
+        s1Subtitle: 'WinOwner is checking the components required on your computer.',
+        s1Chk1: 'Local runtime components',
+        s1Chk2: 'WinOwner background service',
+        s1Chk3: 'Local security configuration',
+        chkOk: 'Ready',
+        chkFail: 'Needs repair',
+        chkWait: 'Checking',
+        s1Ready: 'Your computer is ready',
+        s1FailTitle: 'Some components are not ready yet.',
+        s1FailDesc: 'Click Retry / Repair to fix local components automatically.',
+        s1BtnContinue: 'Continue',
+        s1BtnRepair: 'Retry / Repair',
+        s1BtnRepairing: 'Repairing...',
+        viewErrDetails: 'View error details',
+        s2Title: 'Connect your computer to ChatGPT',
+        s2Subtitle: 'Enter your private connection details so ChatGPT can reach this computer safely.',
+        s2Connecting: 'Setting up connection...',
+        s2ErrorTitle: 'Could not connect yet. Please try again.',
+        s2ErrorHint: 'Check your Tunnel ID, API Key, and internet connection.',
+        s2ErrorInvalidTid: 'Tunnel ID format looks invalid (it should start with tunnel_).',
+        s2ErrorInvalidKey: 'Please enter a valid API Key.',
+        lblTid: 'Tunnel ID',
+        hintTid: 'Paste the ID starting with tunnel_ from OpenAI Tunnels.',
+        lblKey: 'API Key',
+        placeholderKey: 'Enter your API Key',
+        hintKey: 'Stored securely on this computer only and never displayed again.',
+        btnShow: 'Show',
+        btnHide: 'Hide',
+        lblAccessMode: 'Initial access mode',
+        modeRoTitle: 'View-only (default)',
+        modeRoDesc: 'Safely read information only; no file changes.',
+        modeConfirmTitle: 'Allow actions when I confirm',
+        modeConfirmDesc: 'Enables work actions only after you explicitly approve on the next step.',
+        s2GuideSummary: 'How to get Tunnel ID & API Key',
+        s2Guide1: 'Open OpenAI API Keys and create a key dedicated to this computer.',
+        s2Guide2: 'Open OpenAI Tunnels, create a new tunnel, and copy its Tunnel ID.',
+        s2Guide3: 'Paste both values above and click Connect and continue.',
+        lnkKeys: 'Open OpenAI API Keys ↗',
+        lnkTunnels: 'Open OpenAI Tunnels ↗',
+        btnConnect: 'Connect and continue',
+        btnConnecting: 'Connecting...',
+        btnRetry: 'Try again',
+        btnCancelChange: 'Back to verification',
+        s2bBadge: 'Connection active',
+        btnChangeTunnel: 'Change connection info',
+        s2bStep1Title: '1. Add WinOwner in ChatGPT',
+        s2bStep1Desc: 'Open ChatGPT and connect the WinOwner app using the Tunnel ID you just configured.',
+        btnOpenPlugins: 'Open ChatGPT ↗',
+        s2bStep2Title: '2. Send this quick test prompt in ChatGPT to verify',
+        s2bTestPrompt: 'Check my computer specs and disk space',
+        s2bWaitText: 'Waiting for first response from ChatGPT...',
+        btnVerifyConn: 'Verify connection',
+        btnVerifying: 'Verifying...',
+        s3Title: 'Allow ChatGPT to use your computer',
+        s3Subtitle: 'Review the requested scope before confirming. You can revoke access anytime.',
+        confirmOwnerBtn: 'Confirm Owner Access',
+        denyBtn: 'Deny',
+        s3WaitTitle: 'Waiting for authorization request from ChatGPT...',
+        s3WaitDesc: 'When ChatGPT requests access to act on your computer, the summary and verification code will appear here.',
+        s3RoTitle: 'Connected in View-Only (Safe) mode',
+        s3RoDesc: 'ChatGPT can safely read information, and cannot modify files or run commands on your computer.',
+        s3BtnCheck: 'Check for requests',
+        s3BtnGoReady: 'Continue in View-Only mode',
+        s3BtnUseRo: 'Continue in View-Only mode',
+        s3BtnSwitchControl: 'Switch to control-enabled mode',
+        consentCodeLbl: 'Verification code:',
+        consentAppFallback: 'ChatGPT App',
+        consentScopeFolders: 'Approved folders',
+        consentScopeFull: 'Full owner control',
+        consentOpRead: 'Read files and inspect computer status within approved scope.',
+        consentOpWrite: 'Create, edit files, or run tasks inside approved folders.',
+        consentOpSafe: 'Destructive operations remain blocked by default.',
+        consentOpDestructive: 'Includes destructive or sensitive changes as requested.',
+        consentExpiryTpl: 'Expires automatically in {dur}. You can revoke or emergency-stop anytime.',
+        s4Title: 'Your computer is connected!',
+        s4Subtitle: 'Open ChatGPT to start working with your computer right away.',
+        s4LblConn: 'Status:',
+        s4ValConn: 'Connected',
+        s4LblPerm: 'Active permission:',
+        permRead: 'Read-Only (Safe)',
+        permScoped: 'Scoped folder control',
+        permOwner: 'Owner control',
+        btnOpenChatGPT: 'Open ChatGPT',
+        btnTestConn: 'Test connection',
+        s4TestOk: 'Connection is healthy and ChatGPT response is verified.',
+        s4TestWait: 'Connection is active; waiting for a fresh test prompt from ChatGPT.',
+        s4ExamplesTitle: 'Safe example prompts to try right now:',
+        ex1: 'Check my computer specs (CPU, RAM)',
+        ex2: 'View free disk space',
+        ex3: 'Read a file in an authorized workspace',
+        btnCopy: 'Copy',
+        btnCopied: 'Copied',
+        btnRevokeInline: 'Manage / Revoke access',
+        btnRevokeConfirm: 'Confirm revoke',
+        btnCancel: 'Cancel',
+        estopBtn: 'Emergency Stop',
+        estopResetBtn: 'Reset Emergency Stop',
+        stRevokedTitle: 'Access has been revoked. Your computer is in View-Only mode.',
+        stRevokedAction: 'Reconnect & re-authorize',
+        stWaitingAuthTitle: 'Waiting for your authorization',
+        stWaitingAuthAction: 'Review request',
+        stExpiredTitle: 'Authorization session expired for your safety.',
+        stExpiredAction: 'Re-authorize access',
+        stEstopTitle: 'Emergency Stop is active — all control actions are paused.',
+        stOfflineTitle: 'Computer is offline or local service is not responding.',
+        stOfflineRetry: 'Retry connection',
+        stOfflineRepair: 'Auto-repair',
+        stReconnectingTitle: 'Reconnecting automatically...',
+        advTitle: 'Advanced Settings',
+        advSecDiag: 'Diagnostics & Service Status',
+        advRefresh: 'Refresh',
+        thComp: 'Component',
+        thStatus: 'Status',
+        thDetail: 'Detail',
+        advConsole: 'Open Mode B Console (/console) ↗',
+        advSecLogs: 'System Logs (redacted)',
+        advLoadLogs: 'Load Logs',
+        advLogsEmpty: 'No log entries recorded yet.',
+        advSecMaint: 'Repair, Updates & Rollback',
+        advRepair: 'Repair Service',
+        advUpdates: 'Check for Updates',
+        advRollback: 'Rollback',
+        advRollbackNone: 'No verified backup snapshot available for rollback yet.',
+        advSecReconfig: 'Reconfigure Tunnel',
+        lblReconfigTid: 'New Tunnel ID',
+        lblReconfigKey: 'New API Key',
+        lblReconfigMode: 'Connection mode',
+        btnReconfig: 'Reconfigure Tunnel',
+        advRevoke: 'Revoke All Access',
+        advLogout: 'Sign Out',
+        advUninstallTitle: 'Uninstall Local Services',
+        advUninstallDesc: 'Stops and unregisters verified background services. Your local data and keys are preserved.',
+        advUninstallBtn: 'Uninstall',
+        advUninstallConfirm: 'Confirm Uninstall',
+        loginTitle: 'WinOwner Setup Center — Local Owner Sign-In',
+        loginDesc: 'Use Open-SetupCenter.cmd to sign in automatically with zero manual key entry.',
+        loginLabel: 'Owner Console Secret / Admin Key',
+        loginBtn: 'Sign In',
+        minutesUnit: 'minutes',
+        hoursUnit: 'hours'
       }
     };
+
+    function T(key) {
+      return (I18N[currentLang] && I18N[currentLang][key]) || I18N.en[key] || key;
+    }
 
     function setText(id, text) {
       const el = document.getElementById(id);
       if (el) el.textContent = text;
     }
 
-    function applyTranslations() {
-      const t = I18N[currentLang];
-      setText('hdr-title', t.hdrTitle);
-      setText('sec-progress-title', t.secProgress);
-      setText('sec-table-title', t.secTable);
-      setText('th-component', t.thComponent);
-      setText('th-status', t.thStatus);
-      setText('th-detail', t.thDetail);
-      setText('lbl-local-service', t.lblLocal);
-      setText('lbl-tunnel', t.lblTunnel);
-      setText('lbl-chatgpt', t.lblChatgpt);
-      setText('lbl-owner', t.lblOwner);
-      setText('lbl-permissions', t.lblPerm);
-      setText('lbl-version', t.lblVer);
-      setText('sec-actions-title', t.secActions);
-      setText('btn-install-repair', t.btnInstall);
-      setText('btn-connect-chatgpt', t.btnConnect);
-      setText('btn-verify-conn', t.btnVerify);
-      setText('btn-review-owner', t.btnReview);
-      setText('btn-revoke-access', t.btnRevoke);
-      setText('btn-reconfig-tunnel', t.btnReconfig);
-      setText('btn-check-updates', t.btnUpdates);
-      setText('btn-uninstall', t.btnUninstall);
-      setText('sec-pairing-title', t.secPairing);
-      setText('estop-btn', (latestState && latestState.emergency_stop) ? t.estopResetBtn : t.estopBtn);
-      if (latestState) renderState(latestState);
+    function showEl(id, visible) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (visible) el.classList.remove('hidden');
+      else el.classList.add('hidden');
     }
 
-    function toggleLanguage() {
-      currentLang = currentLang === 'vi' ? 'en' : 'vi';
-      document.documentElement.lang = currentLang;
-      applyTranslations();
+    function setPill(id, value, colorClass) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = value;
+      el.className = 'pill ' + colorClass;
     }
 
-    async function apiCall(path, method = 'GET', body = null) {
+    function formatHumanDuration(seconds) {
+      const secs = Math.max(60, Number(seconds || 3600));
+      if (secs >= 3600 && secs % 3600 === 0) {
+        return Math.round(secs / 3600) + ' ' + T('hoursUnit');
+      }
+      return Math.max(1, Math.round(secs / 60)) + ' ' + T('minutesUnit');
+    }
+
+    function createCheckSvg() {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', '14');
+      svg.setAttribute('height', '14');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('aria-hidden', 'true');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M5 12.5l4.2 4.2L19 7');
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', 'currentColor');
+      path.setAttribute('stroke-width', '2.8');
+      path.setAttribute('stroke-linecap', 'round');
+      path.setAttribute('stroke-linejoin', 'round');
+      svg.appendChild(path);
+      return svg;
+    }
+
+    function setTopProgress(active) {
+      showEl('top-progress-wrap', Boolean(active));
+    }
+
+    async function syncCsrfFromState() {
+      try {
+        const res = await fetch('/setup/api/state', {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          credentials: 'same-origin'
+        });
+        if (!res.ok) return null;
+        const data = await res.json().catch(() => null);
+        if (data && data.csrf_token) {
+          csrfToken = data.csrf_token;
+        }
+        return data;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    // A1 Fix: Transparent CSRF resync & single retry on HTTP 403 or missing token
+    async function apiCall(path, method = 'GET', body = null, _retried = false) {
+      const isMutating = method !== 'GET' && method !== 'HEAD';
+      if (isMutating && !csrfToken && path !== '/console/api/login' && path !== '/setup/api/local-handoff') {
+        await syncCsrfFromState();
+      }
       const headers = { 'Accept': 'application/json' };
-      if (csrfToken && method !== 'GET') {
+      if (csrfToken && isMutating) {
         headers['X-CSRF-Token'] = csrfToken;
       }
       if (body !== null) {
@@ -977,219 +2373,829 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
         credentials: 'same-origin',
         body: body !== null ? JSON.stringify(body) : null
       });
+      if (
+        res.status === 403 &&
+        isMutating &&
+        !_retried &&
+        path !== '/console/api/login' &&
+        path !== '/setup/api/local-handoff'
+      ) {
+        const refreshed = await syncCsrfFromState();
+        if (refreshed && refreshed.csrf_token) {
+          return apiCall(path, method, body, true);
+        }
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error_description || data.error || ('HTTP ' + res.status));
+        const err = new Error(data.error_description || data.error || ('HTTP ' + res.status));
+        err.status = res.status;
+        err.code = data.error || '';
+        throw err;
       }
       return data;
     }
 
-    async function loginSetupCenter() {
-      const pwd = document.getElementById('owner-password').value;
-      const errEl = document.getElementById('login-error');
-      errEl.textContent = '';
-      try {
-        const res = await apiCall('/console/api/login', 'POST', { password: pwd });
-        csrfToken = res.csrf_token;
-        document.getElementById('owner-password').value = '';
-        document.getElementById('login-overlay').classList.add('hidden');
-        await refreshSetupState();
-      } catch (e) {
-        errEl.textContent = e.message;
+    function applyStaticTranslations() {
+      document.documentElement.lang = currentLang;
+      setText('hdr-title', T('hdrTitle'));
+      setText('lbl-advanced-btn', T('advBtn'));
+      document.getElementById('lang-seg-vi').classList.toggle('active', currentLang === 'vi');
+      document.getElementById('lang-seg-en').classList.toggle('active', currentLang === 'en');
+
+      setText('loading-text', T('loadingText'));
+      setText('s1-title', T('s1Title'));
+      setText('s1-subtitle', T('s1Subtitle'));
+      setText('s1-chk1-lbl', T('s1Chk1'));
+      setText('s1-chk2-lbl', T('s1Chk2'));
+      setText('s1-chk3-lbl', T('s1Chk3'));
+      setText('s1-ready-text', T('s1Ready'));
+      setText('s1-error-summary', T('viewErrDetails'));
+
+      setText('s2-title', T('s2Title'));
+      setText('s2-subtitle', T('s2Subtitle'));
+      setText('s2-connecting-text', T('s2Connecting'));
+      setText('s2-error-title', T('s2ErrorTitle'));
+      setText('s2-error-summary', T('viewErrDetails'));
+      setText('lbl-tunnel-id', T('lblTid'));
+      setText('hint-tunnel-id', T('hintTid'));
+      setText('lbl-api-key', T('lblKey'));
+      document.getElementById('input-runtime-key').placeholder = T('placeholderKey');
+      setText('hint-api-key', T('hintKey'));
+      const keyInput = document.getElementById('input-runtime-key');
+      setText('btn-toggle-key-vis', keyInput.type === 'password' ? T('btnShow') : T('btnHide'));
+      setText('lbl-access-mode', T('lblAccessMode'));
+      setText('mode-readonly-title', T('modeRoTitle'));
+      setText('mode-readonly-desc', T('modeRoDesc'));
+      setText('mode-confirm-title', T('modeConfirmTitle'));
+      setText('mode-confirm-desc', T('modeConfirmDesc'));
+      setText('s2-guide-summary', T('s2GuideSummary'));
+      setText('s2-guide-1', T('s2Guide1'));
+      setText('s2-guide-2', T('s2Guide2'));
+      setText('s2-guide-3', T('s2Guide3'));
+      setText('lnk-openai-keys', T('lnkKeys'));
+      setText('lnk-openai-tunnels', T('lnkTunnels'));
+      setText('btn-cancel-change-tunnel', T('btnCancelChange'));
+
+      setText('s2b-badge', T('s2bBadge'));
+      setText('btn-change-tunnel', T('btnChangeTunnel'));
+      setText('s2b-step1-title', T('s2bStep1Title'));
+      setText('s2b-step1-desc', T('s2bStep1Desc'));
+      setText('btn-open-chatgpt-plugins', T('btnOpenPlugins'));
+      setText('s2b-step2-title', T('s2bStep2Title'));
+      setText('s2b-test-prompt', T('s2bTestPrompt'));
+      setText('btn-copy-verify-prompt', T('btnCopy'));
+      setText('s2b-wait-text', T('s2bWaitText'));
+      setText('btn-verify-conn', T('btnVerifyConn'));
+
+      setText('s3-title', T('s3Title'));
+      setText('s3-subtitle', T('s3Subtitle'));
+
+      setText('s4-title', T('s4Title'));
+      setText('s4-subtitle', T('s4Subtitle'));
+      setText('s4-lbl-conn', T('s4LblConn'));
+      setText('s4-val-conn', T('s4ValConn'));
+      setText('s4-lbl-perm', T('s4LblPerm'));
+      setText('btn-open-chatgpt', T('btnOpenChatGPT'));
+      setText('btn-test-conn', T('btnTestConn'));
+      setText('s4-examples-title', T('s4ExamplesTitle'));
+      setText('ex-prompt-1', T('ex1'));
+      setText('ex-prompt-2', T('ex2'));
+      setText('ex-prompt-3', T('ex3'));
+      document.querySelectorAll('[data-copy-target]').forEach((b) => { b.textContent = T('btnCopy'); });
+      setText('btn-revoke-inline', T('btnRevokeInline'));
+      setText('btn-revoke-confirm', T('btnRevokeConfirm'));
+      setText('btn-revoke-cancel', T('btnCancel'));
+
+      // Advanced Settings Drawer
+      setText('adv-drawer-title', T('advTitle'));
+      setText('adv-sec-diag', T('advSecDiag'));
+      setText('btn-adv-refresh', T('advRefresh'));
+      setText('th-component', T('thComp'));
+      setText('th-status', T('thStatus'));
+      setText('th-detail', T('thDetail'));
+      setText('adv-console-link', T('advConsole'));
+      setText('adv-sec-logs', T('advSecLogs'));
+      setText('btn-adv-load-logs', T('advLoadLogs'));
+      setText('btn-adv-copy-logs', T('btnCopy'));
+      setText('adv-sec-maint', T('advSecMaint'));
+      setText('btn-adv-repair', T('advRepair'));
+      setText('btn-adv-updates', T('advUpdates'));
+      setText('btn-adv-rollback', T('advRollback'));
+      setText('adv-sec-reconfig', T('advSecReconfig'));
+      setText('lbl-reconfig-tid', T('lblReconfigTid'));
+      setText('lbl-reconfig-key', T('lblReconfigKey'));
+      setText('lbl-reconfig-mode', T('lblReconfigMode'));
+      setText('btn-submit-reconfig', T('btnReconfig'));
+      setText('btn-adv-revoke', T('advRevoke'));
+      setText('btn-adv-logout', T('advLogout'));
+      setText('adv-uninstall-title', T('advUninstallTitle'));
+      setText('adv-uninstall-desc', T('advUninstallDesc'));
+      setText('btn-adv-uninstall', T('advUninstallBtn'));
+      setText('btn-adv-uninstall-confirm', T('advUninstallConfirm'));
+      setText('btn-adv-uninstall-cancel', T('btnCancel'));
+
+      // Login overlay
+      setText('login-title', T('loginTitle'));
+      setText('login-label', T('loginLabel'));
+      setText('login-btn', T('loginBtn'));
+
+      if (latestState) renderState(latestState);
+    }
+
+    function toggleLanguage() {
+      currentLang = currentLang === 'vi' ? 'en' : 'vi';
+      applyStaticTranslations();
+    }
+
+    function determineEffectiveUiState(st) {
+      if (uiOverrideState) return uiOverrideState;
+      if (!st) return 'loading';
+      return st.ui_state || 'setup_connect';
+    }
+
+    function determineTargetStep(st) {
+      if (!st) return 1;
+      const localOk = st.status_table && st.status_table.local_service === 'Ready';
+      if (!localOk) return 1;
+      const cgVerified = Boolean(st.chatgpt_connection && st.chatgpt_connection.verified_read_tool_call);
+      if (!cgVerified) return 2;
+      const pending = (st.pending_challenges || []).length;
+      const ownerVerified = Boolean(st.owner_identity && st.owner_identity.verified);
+      const effReady = Boolean(st.effective_permissions && st.effective_permissions.owner_control_ready);
+      const supportsId = Boolean(st.chatgpt_connection && st.chatgpt_connection.supports_verifiable_owner_identity);
+
+      if (st.emergency_stop) return 4;
+      if (pending > 0 && !ownerVerified) return 3;
+      if (effReady || ownerVerified) return 4;
+      if (!supportsId) return 3;
+      return 3;
+    }
+
+    function maxAllowedStep(st) {
+      if (!st) return 1;
+      const localOk = st.status_table && st.status_table.local_service === 'Ready';
+      if (!localOk) return 1;
+      const cgVerified = Boolean(st.chatgpt_connection && st.chatgpt_connection.verified_read_tool_call);
+      if (!cgVerified) return 2;
+      // Once ChatGPT is verified, user may view Step 3 or Step 4 (Step 4 honestly displays Read-Only if not escalated)
+      return 4;
+    }
+
+    function renderStepper(st, activeStep) {
+      const nav = document.getElementById('stepper-container');
+      nav.textContent = '';
+      const labels = T('steps');
+      const localOk = Boolean(st && st.status_table && st.status_table.local_service === 'Ready');
+      const cgOk = Boolean(st && st.chatgpt_connection && st.chatgpt_connection.verified_read_tool_call);
+      const ownerOk = Boolean(st && st.owner_identity && st.owner_identity.verified);
+      const ctrlOk = Boolean(st && st.effective_permissions && st.effective_permissions.owner_control_ready);
+      const completed = [localOk, cgOk, ownerOk || (cgOk && activeStep === 4), ctrlOk || (cgOk && activeStep === 4)];
+      const maxStep = maxAllowedStep(st);
+
+      for (let i = 1; i <= 4; i++) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const isError = (i === 1 && st && !localOk) || (i === 2 && uiOverrideState === 'connection_failed');
+        const isDone = completed[i - 1] && i < activeStep && !isError;
+        const isActive = i === activeStep;
+        const canClick = Boolean(st && i <= maxStep);
+
+        btn.className = 'step-item' + (isDone ? ' done' : '') + (isActive ? ' active' : '') + (isError ? ' error' : '') + (canClick ? ' clickable' : '');
+        if (isActive) btn.setAttribute('aria-current', 'step');
+        if (!canClick) btn.disabled = true;
+
+        const node = document.createElement('span');
+        node.className = 'step-node';
+        if (isError) {
+          node.textContent = '!';
+        } else if (isDone || (i === 4 && ctrlOk)) {
+          node.appendChild(createCheckSvg());
+        } else {
+          node.textContent = String(i);
+        }
+
+        const lbl = document.createElement('span');
+        lbl.className = 'step-label';
+        lbl.textContent = labels[i - 1];
+
+        btn.appendChild(node);
+        btn.appendChild(lbl);
+        if (canClick) {
+          btn.addEventListener('click', () => {
+            manualStepView = i;
+            if (i === 2) forceStep2Form = !(st.tunnel_details && st.tunnel_details.connected);
+            renderState(latestState);
+          });
+        }
+        nav.appendChild(btn);
       }
     }
 
-    async function logoutSetupCenter() {
-      try { await apiCall('/console/api/logout', 'POST', {}); } catch (_) {}
-      csrfToken = null;
-      document.getElementById('login-overlay').classList.remove('hidden');
-    }
+    function renderStateBanner(st, uiState) {
+      const box = document.getElementById('state-alert-banner');
+      box.textContent = '';
+      box.className = 'hidden';
+      box.removeAttribute('role');
 
-    function setPill(id, value, colorClass) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.textContent = value;
-      el.className = 'pill ' + colorClass;
-    }
+      function buildBanner(variant, iconText, titleText, actions, isAlert) {
+        box.className = 'callout ' + variant;
+        if (isAlert) box.setAttribute('role', 'alert');
+        else box.setAttribute('aria-live', 'polite');
 
-    function renderState(st) {
-      latestState = st;
-      setText('hdr-state-pill', st.state);
-      const estopBtn = document.getElementById('estop-btn');
-      if (estopBtn) {
-        const t = I18N[currentLang];
-        estopBtn.textContent = st.emergency_stop ? t.estopResetBtn : t.estopBtn;
-        estopBtn.className = st.emergency_stop ? 'warn' : 'danger';
-      }
-      const tbl = st.status_table || {};
+        const ic = document.createElement('span');
+        ic.className = 'callout-icon';
+        ic.setAttribute('aria-hidden', 'true');
+        if (iconText === 'SPINNER') {
+          const sp = document.createElement('span');
+          sp.className = 'spinner';
+          ic.appendChild(sp);
+        } else {
+          ic.textContent = iconText;
+        }
+        const body = document.createElement('div');
+        body.className = 'callout-body';
+        const title = document.createElement('div');
+        title.className = 'callout-title';
+        title.textContent = titleText;
+        body.appendChild(title);
 
-      setPill('val-local-service', tbl.local_service || 'Error', tbl.local_service === 'Ready' ? 'green' : 'red');
-      setPill('val-tunnel', tbl.tunnel || 'Disconnected', tbl.tunnel === 'Connected' ? 'green' : 'amber');
-      setPill('val-chatgpt', tbl.chatgpt || 'Not Verified', tbl.chatgpt === 'Verified' ? 'green' : 'amber');
-      setPill('val-owner', tbl.owner_identity || 'Pending', tbl.owner_identity === 'Verified' ? 'green' : 'amber');
-
-      const permColor = tbl.permissions === 'Owner' ? 'green' : (tbl.permissions === 'Scoped' ? 'blue' : 'amber');
-      setPill('val-permissions', tbl.permissions || 'Read', permColor);
-      setPill('val-version', tbl.version || 'Current', tbl.version === 'Current' ? 'green' : 'blue');
-
-      setText('det-local-service', 'Profile: ' + st.profile + (st.emergency_stop ? ' [EMERGENCY STOP]' : ''));
-      setText('det-tunnel', (st.tunnel_details && st.tunnel_details.status_code) || '');
-      const cg = st.chatgpt_connection || {};
-      setText('det-chatgpt', cg.verified_read_tool_call
-        ? ('Verified tool: ' + (cg.last_verified_tool || 'ok') + ' (' + (cg.last_auth_mode || '') + ')')
-        : 'Run a read-only prompt in ChatGPT to verify');
-      const oi = st.owner_identity || {};
-      setText('det-owner', oi.verified
-        ? ('Client: ' + (oi.client_id_masked || '') + ' (' + (oi.remaining_seconds || 0) + 's left)')
-        : ('Pending challenges: ' + (oi.pending_challenges_count || 0)));
-      const ep = st.effective_permissions || {};
-      setText('det-permissions', 'Tiers: ' + ((ep.enabled_tiers || ['READ']).join(', ')));
-      const vi = st.version_info || {};
-      setText('det-version', (vi.current_version || 'v1.2.0') + (vi.update_available ? (' -> ' + vi.latest_version) : ''));
-
-      // Render 4 steps safely using textContent
-      const stepper = document.getElementById('stepper-container');
-      stepper.textContent = '';
-      for (const s of (st.steps || [])) {
-        const box = document.createElement('div');
-        box.className = 'step-box' + (s.completed ? ' done' : '') + (s.active ? ' current' : '');
-        box.textContent = (currentLang === 'vi' ? s.label_vi : s.label_en) + (s.completed ? ' [OK]' : '');
-        stepper.appendChild(box);
+        if (actions && actions.length > 0) {
+          const actRow = document.createElement('div');
+          actRow.className = 'callout-actions';
+          for (const a of actions) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = a.cls;
+            b.textContent = a.label;
+            b.addEventListener('click', a.onClick);
+            actRow.appendChild(b);
+          }
+          body.appendChild(actRow);
+        }
+        box.appendChild(ic);
+        box.appendChild(body);
       }
 
-      const guidance = (st.guidance && st.guidance[currentLang]) || '';
-      setText('guidance-text', guidance);
+      if (uiState === 'emergency_stopped') {
+        buildBanner('critical', '⛔', T('stEstopTitle'), [
+          { cls: 'btn btn-danger btn-sm', label: T('estopResetBtn'), onClick: () => runEmergencyStopToggle() }
+        ], true);
+      } else if (uiState === 'revoked') {
+        buildBanner('warn', '⚠', T('stRevokedTitle'), [
+          { cls: 'btn btn-primary btn-sm', label: T('stRevokedAction'), onClick: () => { manualStepView = 3; renderState(latestState); } }
+        ], false);
+      } else if (uiState === 'expired') {
+        buildBanner('warn', '⏱', T('stExpiredTitle'), [
+          { cls: 'btn btn-primary btn-sm', label: T('stExpiredAction'), onClick: () => { manualStepView = 3; renderState(latestState); } }
+        ], false);
+      } else if (uiState === 'offline') {
+        buildBanner('offline', '☁', T('stOfflineTitle'), [
+          { cls: 'btn btn-primary btn-sm', label: T('stOfflineRetry'), onClick: () => refreshSetupState() },
+          { cls: 'btn btn-sm', label: T('stOfflineRepair'), onClick: () => runInstallRepair() }
+        ], true);
+      } else if (uiState === 'waiting_authorization' && manualStepView !== null && manualStepView !== 3) {
+        buildBanner('info', '🛡', T('stWaitingAuthTitle'), [
+          { cls: 'btn btn-primary btn-sm', label: T('stWaitingAuthAction'), onClick: () => { manualStepView = 3; renderState(latestState); } }
+        ], false);
+      } else if (uiState === 'reconnecting') {
+        buildBanner('info', 'SPINNER', T('stReconnectingTitle'), [], false);
+      }
+    }
 
-      // Render pending pairing challenges safely using DOM textContent nodes
-      const chContainer = document.getElementById('challenges-container');
-      chContainer.textContent = '';
-      const pending = st.pending_challenges || [];
-      if (pending.length === 0) {
-        const emptyP = document.createElement('p');
-        emptyP.style.color = 'var(--muted)';
-        emptyP.textContent = I18N[currentLang].noPending;
-        chContainer.appendChild(emptyP);
+    function renderStep1(st) {
+      const checks = (st && st.checks) || {};
+      const localOk = Boolean(st && st.status_table && st.status_table.local_service === 'Ready');
+      const items = [
+        ['s1-chk1-val', localOk && checks.runtime_ready !== false],
+        ['s1-chk2-val', localOk && checks.service_ready !== false],
+        ['s1-chk3-val', checks.security_ready !== false]
+      ];
+      for (const [id, ok] of items) {
+        const el = document.getElementById(id);
+        el.textContent = ok ? T('chkOk') : T('chkFail');
+        el.className = 'check-badge ' + (ok ? 'ok' : 'fail');
+      }
+
+      const alertEl = document.getElementById('s1-alert');
+      alertEl.textContent = '';
+      if (!localOk) {
+        alertEl.className = 'callout danger';
+        const ic = document.createElement('span');
+        ic.className = 'callout-icon';
+        ic.textContent = '✕';
+        const bd = document.createElement('div');
+        bd.className = 'callout-body';
+        const t = document.createElement('div');
+        t.className = 'callout-title';
+        t.textContent = T('s1FailTitle');
+        const d = document.createElement('p');
+        d.className = 'callout-desc';
+        d.textContent = T('s1FailDesc');
+        bd.appendChild(t);
+        bd.appendChild(d);
+        alertEl.appendChild(ic);
+        alertEl.appendChild(bd);
+        showEl('s1-ready-banner', false);
+        showEl('s1-error-details', Boolean(step1ErrorDetail));
+        setText('s1-error-detail-text', step1ErrorDetail);
+        setText('btn-s1-primary', T('s1BtnRepair'));
       } else {
+        alertEl.className = 'hidden';
+        showEl('s1-ready-banner', true);
+        showEl('s1-error-details', false);
+        setText('btn-s1-primary', T('s1BtnContinue'));
+      }
+    }
+
+    function renderStep2(st, uiState) {
+      const tunnelConnected = Boolean(st && st.tunnel_details && st.tunnel_details.connected);
+      const isConnecting = uiState === 'connecting';
+      const showForm = !tunnelConnected || forceStep2Form || isConnecting || uiState === 'connection_failed';
+
+      showEl('s2-form-pane', showForm);
+      showEl('s2-verify-pane', !showForm);
+
+      if (showForm) {
+        showEl('s2-connecting-banner', isConnecting);
+        showEl('s2-error-alert', uiState === 'connection_failed');
+        showEl('s2-error-details', uiState === 'connection_failed' && Boolean(connectErrorDetail));
+        setText('s2-error-detail-text', connectErrorDetail);
+        setText('s2-error-hint', T('s2ErrorHint'));
+        showEl('btn-cancel-change-tunnel', tunnelConnected && !isConnecting);
+
+        const submitBtn = document.getElementById('btn-submit-connect');
+        submitBtn.disabled = isConnecting;
+        submitBtn.textContent = isConnecting
+          ? T('btnConnecting')
+          : (uiState === 'connection_failed' ? T('btnRetry') : T('btnConnect'));
+        document.getElementById('input-tunnel-id').disabled = isConnecting;
+        document.getElementById('input-runtime-key').disabled = isConnecting;
+      } else {
+        const cg = (st && st.chatgpt_connection) || {};
+        const promptText = currentLang === 'vi'
+          ? (cg.verification_prompt_vi || T('s2bTestPrompt'))
+          : (cg.verification_prompt_en || T('s2bTestPrompt'));
+        setText('s2b-test-prompt', promptText);
+      }
+    }
+
+    function renderStep3(st) {
+      const pending = (st && st.pending_challenges) || [];
+      const container = document.getElementById('challenges-container');
+      container.textContent = '';
+
+      if (pending.length > 0) {
+        showEl('s3-pending-pane', true);
+        showEl('s3-empty-pane', false);
+
         for (const ch of pending) {
           const card = document.createElement('div');
-          card.className = 'challenge-card';
+          card.className = 'consent-card';
 
-          const title = document.createElement('div');
-          title.style.fontWeight = '700';
-          const maskedCid = ch.client_id && ch.client_id.length > 15 ? (ch.client_id.slice(0, 12) + '...') : (ch.client_id || '');
-          title.textContent = 'Code: ' + ch.verification_code + ' | Client: ' + (ch.client_name || 'OAuth 2.1 Client') + ' (' + maskedCid + ') | Auth: OAuth 2.1';
-          card.appendChild(title);
+          const top = document.createElement('div');
+          top.className = 'consent-top';
+          const appWrap = document.createElement('div');
+          const appName = document.createElement('div');
+          appName.style.fontWeight = '600';
+          appName.style.fontSize = '15px';
+          appName.textContent = ch.client_name || T('consentAppFallback');
+          const scopePill = document.createElement('span');
+          const isFull = String(ch.requested_permission_level || '').toUpperCase() === 'OWNER';
+          scopePill.className = 'pill ' + (isFull ? 'amber' : 'blue');
+          scopePill.style.marginTop = '4px';
+          scopePill.textContent = isFull ? T('consentScopeFull') : T('consentScopeFolders');
+          appWrap.appendChild(appName);
+          appWrap.appendChild(scopePill);
 
-          const meta = document.createElement('div');
-          meta.style.fontSize = '12px';
-          meta.style.color = 'var(--muted)';
-          meta.style.margin = '6px 0';
-          meta.textContent = 'Scope: ' + ch.requested_permission_level +
-            ' | Tiers: ' + (ch.requested_tiers || []).join(', ') +
-            ' | Workspaces: ' + ((ch.requested_workspaces || []).join(', ') || 'Default approved workspace') +
-            ' | Destructive: ' + (ch.allow_destructive ? 'Allowed' : 'Blocked') +
-            ' | TTL: ' + ch.requested_ttl_seconds + 's' +
-            ' | Expires in: ' + ch.remaining_seconds + 's';
-          card.appendChild(meta);
+          const codeWrap = document.createElement('div');
+          codeWrap.style.textAlign = 'right';
+          const codeLbl = document.createElement('div');
+          codeLbl.style.fontSize = '11.5px';
+          codeLbl.style.color = 'var(--text-muted)';
+          codeLbl.textContent = T('consentCodeLbl');
+          const codeBadge = document.createElement('div');
+          codeBadge.className = 'code-badge';
+          codeBadge.textContent = ch.verification_code || '----';
+          codeWrap.appendChild(codeLbl);
+          codeWrap.appendChild(codeBadge);
+
+          top.appendChild(appWrap);
+          top.appendChild(codeWrap);
+          card.appendChild(top);
+
+          const wsList = ch.requested_workspaces || [];
+          if (wsList.length > 0) {
+            const chips = document.createElement('div');
+            chips.className = 'chip-list';
+            for (const wsPath of wsList) {
+              const chip = document.createElement('span');
+              chip.className = 'chip';
+              chip.textContent = wsPath;
+              chips.appendChild(chip);
+            }
+            card.appendChild(chips);
+          }
+
+          const ul = document.createElement('ul');
+          ul.className = 'consent-list';
+          const bullets = [
+            T('consentOpRead'),
+            T('consentOpWrite'),
+            ch.allow_destructive ? T('consentOpDestructive') : T('consentOpSafe')
+          ];
+          for (const bTxt of bullets) {
+            const li = document.createElement('li');
+            li.textContent = bTxt;
+            ul.appendChild(li);
+          }
+          card.appendChild(ul);
+
+          const exp = document.createElement('div');
+          exp.style.fontSize = '12px';
+          exp.style.color = 'var(--text-muted)';
+          exp.textContent = T('consentExpiryTpl').replace('{dur}', formatHumanDuration(ch.requested_ttl_seconds));
+          card.appendChild(exp);
 
           const btnRow = document.createElement('div');
-          btnRow.style.display = 'flex';
-          btnRow.style.gap = '8px';
-
-          const btnConfirm = document.createElement('button');
-          btnConfirm.className = 'success';
-          btnConfirm.textContent = I18N[currentLang].confirmOwnerBtn;
-          btnConfirm.onclick = () => confirmOwnerAccess(ch.challenge_id, ch.requested_permission_level, ch.requested_workspaces);
+          btnRow.className = 'btn-row';
+          const btnApprove = document.createElement('button');
+          btnApprove.type = 'button';
+          btnApprove.className = 'btn btn-primary';
+          btnApprove.textContent = T('confirmOwnerBtn');
+          btnApprove.addEventListener('click', () => confirmOwnerAccess(
+            ch.challenge_id,
+            ch.requested_permission_level,
+            ch.requested_workspaces
+          ));
 
           const btnDeny = document.createElement('button');
-          btnDeny.className = 'danger';
-          btnDeny.textContent = I18N[currentLang].denyBtn;
-          btnDeny.onclick = () => denyChallenge(ch.challenge_id);
+          btnDeny.type = 'button';
+          btnDeny.className = 'btn';
+          btnDeny.textContent = T('denyBtn');
+          btnDeny.addEventListener('click', () => denyChallenge(ch.challenge_id));
 
-          btnRow.appendChild(btnConfirm);
+          btnRow.appendChild(btnApprove);
           btnRow.appendChild(btnDeny);
           card.appendChild(btnRow);
-          chContainer.appendChild(card);
+          container.appendChild(card);
+        }
+      } else {
+        showEl('s3-pending-pane', false);
+        showEl('s3-empty-pane', true);
+        const cg = (st && st.chatgpt_connection) || {};
+        const isViewOnly = !cg.supports_verifiable_owner_identity || cg.last_auth_mode === 'shared_tunnel_bearer';
+        if (isViewOnly) {
+          setText('s3-info-icon', 'ℹ');
+          setText('s3-info-title', T('s3RoTitle'));
+          setText('s3-info-desc', T('s3RoDesc'));
+          setText('btn-s3-primary', T('s3BtnGoReady'));
+          setText('btn-s3-secondary', T('s3BtnSwitchControl'));
+        } else {
+          setText('s3-info-icon', '🛡');
+          setText('s3-info-title', T('s3WaitTitle'));
+          setText('s3-info-desc', T('s3WaitDesc'));
+          setText('btn-s3-primary', T('s3BtnCheck'));
+          setText('btn-s3-secondary', T('s3BtnUseRo'));
         }
       }
     }
 
-    async function refreshSetupState() {
-      const st = await apiCall('/setup/api/state', 'GET');
-      renderState(st);
-      return st;
+    function renderStep4(st) {
+      const ep = (st && st.effective_permissions) || {};
+      const level = String(ep.level || 'READ').toUpperCase();
+      const permPill = document.getElementById('s4-pill-perm');
+      if (st && st.emergency_stop) {
+        permPill.textContent = T('permRead');
+        permPill.className = 'pill red';
+      } else if (level === 'OWNER') {
+        permPill.textContent = T('permOwner');
+        permPill.className = 'pill green';
+      } else if (level === 'SCOPED') {
+        permPill.textContent = T('permScoped');
+        permPill.className = 'pill blue';
+      } else {
+        permPill.textContent = T('permRead');
+        permPill.className = 'pill neutral';
+      }
+
+      const estopBtn = document.getElementById('btn-estop-footer');
+      const isEstop = Boolean(st && st.emergency_stop);
+      estopBtn.textContent = isEstop ? T('estopResetBtn') : T('estopBtn');
+      estopBtn.className = isEstop ? 'btn btn-danger btn-sm' : 'btn btn-danger-outline btn-sm';
     }
 
-    function showPanel(id) {
-      hidePanels();
-      const el = document.getElementById(id);
-      if (el) el.classList.remove('hidden');
+    function renderAdvancedDiagnostics(st) {
+      if (!st) return;
+      const tbl = st.status_table || {};
+      setPill('val-local-service', tbl.local_service || 'Error', tbl.local_service === 'Ready' ? 'green' : 'red');
+      setPill('val-tunnel', tbl.tunnel || 'Disconnected', tbl.tunnel === 'Connected' ? 'green' : 'amber');
+      setPill('val-chatgpt', tbl.chatgpt || 'Not Verified', tbl.chatgpt === 'Verified' ? 'green' : 'amber');
+      setPill('val-owner', tbl.owner_identity || 'Pending', tbl.owner_identity === 'Verified' ? 'green' : 'amber');
+      const permColor = tbl.permissions === 'Owner' ? 'green' : (tbl.permissions === 'Scoped' ? 'blue' : 'amber');
+      setPill('val-permissions', tbl.permissions || 'Read', permColor);
+      setPill('val-version', tbl.version || 'Current', tbl.version === 'Current' ? 'green' : 'blue');
+
+      setText('det-local-service', 'Profile: ' + (st.profile || 'read_only') + (st.emergency_stop ? ' [E-STOP]' : ''));
+      setText('det-tunnel', (st.tunnel_details && st.tunnel_details.status_code) || 'TUNNEL_NOT_CONFIGURED');
+      const cg = st.chatgpt_connection || {};
+      setText('det-chatgpt', cg.verified_read_tool_call
+        ? ((cg.last_verified_tool || 'verified') + ' (' + (cg.last_auth_mode || '') + ')')
+        : 'Not verified');
+      const oi = st.owner_identity || {};
+      setText('det-owner', oi.verified
+        ? ((oi.client_id_masked || 'verified') + ' (' + (oi.remaining_seconds || 0) + 's)')
+        : ('Pending: ' + (oi.pending_challenges_count || 0)));
+      const ep = st.effective_permissions || {};
+      setText('det-permissions', (ep.enabled_tiers || ['READ']).join(', '));
+      const vi = st.version_info || {};
+      const verStr = (vi.current_version || 'v1.2.0') + (vi.update_available ? (' -> ' + vi.latest_version) : '');
+      setText('det-version', verStr);
+      setText('adv-version-meta', 'Version: ' + verStr + (vi.git_sha ? (' · ' + String(vi.git_sha).slice(0, 8)) : ''));
+      setText('adv-guidance-box', (st.guidance && st.guidance[currentLang]) || '');
+
+      const rbBtn = document.getElementById('btn-adv-rollback');
+      const rbAvail = Boolean(vi.rollback_available);
+      rbBtn.title = rbAvail ? '' : T('advRollbackNone');
+
+      const advEstop = document.getElementById('btn-adv-estop');
+      advEstop.textContent = st.emergency_stop ? T('estopResetBtn') : T('estopBtn');
     }
 
-    function hidePanels() {
-      document.getElementById('panel-connect').classList.add('hidden');
-      document.getElementById('panel-reconfig').classList.add('hidden');
+    function scheduleAutoPoll(activeStep, st) {
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+      if (!st) return;
+      const tunnelConnected = Boolean(st.tunnel_details && st.tunnel_details.connected);
+      const cgVerified = Boolean(st.chatgpt_connection && st.chatgpt_connection.verified_read_tool_call);
+      const ownerVerified = Boolean(st.owner_identity && st.owner_identity.verified);
+      const supportsId = Boolean(st.chatgpt_connection && st.chatgpt_connection.supports_verifiable_owner_identity);
+
+      if (activeStep === 2 && tunnelConnected && !cgVerified && !forceStep2Form) {
+        pollTimer = setTimeout(() => refreshSetupState({ silent: true }), 3000);
+      } else if (activeStep === 3 && cgVerified && !ownerVerified && supportsId) {
+        pollTimer = setTimeout(() => refreshSetupState({ silent: true }), 2500);
+      } else if (uiOverrideState === 'reconnecting') {
+        pollTimer = setTimeout(() => refreshSetupState({ silent: true }), 2500);
+      }
     }
 
-    function showActionOutput(obj) {
-      setText('action-result-box', JSON.stringify(obj, null, 2));
+    function renderState(st) {
+      latestState = st;
+      const mainEl = document.getElementById('wizard-main');
+      const uiState = determineEffectiveUiState(st);
+      mainEl.setAttribute('data-ui-state', uiState);
+      setTopProgress(uiState === 'connecting' || uiState === 'reconnecting');
+
+      if (!st || uiState === 'loading') {
+        showEl('view-loading', true);
+        showEl('step-view-1', false);
+        showEl('step-view-2', false);
+        showEl('step-view-3', false);
+        showEl('step-view-4', false);
+        renderStepper(null, 1);
+        return;
+      }
+
+      showEl('view-loading', false);
+      const backendStep = determineTargetStep(st);
+      const maxStep = maxAllowedStep(st);
+      if (manualStepView !== null && manualStepView > maxStep) {
+        manualStepView = null;
+      }
+      let activeStep = manualStepView !== null ? manualStepView : backendStep;
+
+      // Auto-advance Step 1 -> Step 2 cleanly once local checks pass on initial visit
+      if (activeStep === 1 && backendStep >= 2 && !step1AutoAdvanced && manualStepView === null) {
+        step1AutoAdvanced = true;
+        activeStep = backendStep;
+      }
+
+      renderStepper(st, activeStep);
+      renderStateBanner(st, uiState);
+
+      showEl('step-view-1', activeStep === 1);
+      showEl('step-view-2', activeStep === 2);
+      showEl('step-view-3', activeStep === 3);
+      showEl('step-view-4', activeStep === 4);
+
+      if (activeStep === 1) renderStep1(st);
+      if (activeStep === 2) renderStep2(st, uiState);
+      if (activeStep === 3) renderStep3(st);
+      if (activeStep === 4) renderStep4(st);
+
+      renderAdvancedDiagnostics(st);
+      scheduleAutoPoll(activeStep, st);
+    }
+
+    async function refreshSetupState(opts = {}) {
+      try {
+        const st = await apiCall('/setup/api/state', 'GET');
+        if (st && st.csrf_token) csrfToken = st.csrf_token;
+        reconnectFailures = 0;
+        if (uiOverrideState === 'offline' || uiOverrideState === 'reconnecting' || uiOverrideState === 'loading') {
+          uiOverrideState = null;
+        }
+        renderState(st);
+        return st;
+      } catch (e) {
+        if (e.status === 401) {
+          document.getElementById('login-overlay').classList.remove('hidden');
+          return null;
+        }
+        reconnectFailures += 1;
+        uiOverrideState = reconnectFailures <= 2 ? 'reconnecting' : 'offline';
+        if (latestState) {
+          renderState(latestState);
+        } else {
+          document.getElementById('wizard-main').setAttribute('data-ui-state', uiOverrideState);
+          renderStateBanner(null, uiOverrideState);
+          showEl('view-loading', false);
+        }
+        if (!opts.silent) throw e;
+        return null;
+      }
+    }
+
+    function showAdvFeedback(variant, message) {
+      const box = document.getElementById('adv-feedback');
+      box.className = 'callout ' + variant;
+      box.textContent = message;
     }
 
     async function runInstallRepair() {
+      const btn = document.getElementById('btn-s1-primary');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = T('s1BtnRepairing');
+      }
+      uiOverrideState = 'connecting';
+      if (latestState) renderState(latestState);
       try {
         const res = await apiCall('/setup/api/actions/install-repair', 'POST', {});
+        step1ErrorDetail = '';
+        uiOverrideState = null;
+        manualStepView = null;
         if (res.state_snapshot) renderState(res.state_snapshot);
-        showActionOutput(res.summary || res);
+        showAdvFeedback('success', (res.summary && (currentLang === 'vi' ? res.summary.message_vi : res.summary.message_en)) || 'OK');
       } catch (e) {
-        showActionOutput({ error: e.message });
+        step1ErrorDetail = e.message;
+        uiOverrideState = null;
+        if (latestState) renderState(latestState);
+        showAdvFeedback('danger', e.message);
+      } finally {
+        if (btn) btn.disabled = false;
       }
     }
 
     async function submitConnectChatGPT(isReconfigure) {
-      const tid = document.getElementById(isReconfigure ? 'reconfig-tunnel-id' : 'input-tunnel-id').value.trim();
+      const tidEl = document.getElementById(isReconfigure ? 'reconfig-tunnel-id' : 'input-tunnel-id');
       const keyEl = document.getElementById(isReconfigure ? 'reconfig-runtime-key' : 'input-runtime-key');
-      const authModeEl = document.getElementById(isReconfigure ? 'reconfig-auth-mode' : 'input-auth-mode');
-      const authMode = authModeEl ? authModeEl.value : 'oauth';
-      const apiKey = keyEl.value;
-      keyEl.value = '';
+      const tid = (tidEl.value || '').trim().toLowerCase();
+      const apiKey = (keyEl.value || '').trim();
+      let authMode = 'oauth';
+      if (isReconfigure) {
+        const sel = document.getElementById('reconfig-auth-mode');
+        authMode = sel ? sel.value : 'oauth';
+      } else {
+        const checked = document.querySelector('input[name="connect_auth_mode"]:checked');
+        authMode = checked ? checked.value : 'oauth';
+      }
+
+      if (!/^tunnel_(?:[a-z0-9]{32}|[a-z0-9]{4}_[a-z0-9]{32})$/.test(tid)) {
+        if (isReconfigure) {
+          showEl('reconfig-error-alert', true);
+          setText('reconfig-error-text', T('s2ErrorInvalidTid'));
+        } else {
+          connectErrorDetail = T('s2ErrorInvalidTid');
+          uiOverrideState = 'connection_failed';
+          renderState(latestState);
+        }
+        return;
+      }
+      if (apiKey.length < 20) {
+        if (isReconfigure) {
+          showEl('reconfig-error-alert', true);
+          setText('reconfig-error-text', T('s2ErrorInvalidKey'));
+        } else {
+          connectErrorDetail = T('s2ErrorInvalidKey');
+          uiOverrideState = 'connection_failed';
+          renderState(latestState);
+        }
+        return;
+      }
+
       const ep = isReconfigure ? '/setup/api/actions/reconfigure-tunnel' : '/setup/api/actions/connect-chatgpt';
+      if (isReconfigure) {
+        showEl('reconfig-error-alert', false);
+        document.getElementById('btn-submit-reconfig').disabled = true;
+      } else {
+        connectErrorDetail = '';
+        uiOverrideState = 'connecting';
+        renderState(latestState);
+      }
+
       try {
-        const res = await apiCall(ep, 'POST', { tunnel_id: tid, runtime_api_key: apiKey, auth_mode: authMode });
-        hidePanels();
+        const res = await apiCall(ep, 'POST', {
+          tunnel_id: tid,
+          runtime_api_key: apiKey,
+          auth_mode: authMode
+        });
+        // A1 Fix: Clear API key ONLY after apiCall succeeds (never before!)
+        keyEl.value = '';
+        uiOverrideState = null;
+        forceStep2Form = false;
+        if (!isReconfigure) manualStepView = 2;
         if (res.state_snapshot) renderState(res.state_snapshot);
-        showActionOutput(res.summary || res);
+        if (isReconfigure) {
+          showAdvFeedback('success', (res.summary && (currentLang === 'vi' ? res.summary.message_vi : res.summary.message_en)) || 'OK');
+        }
       } catch (e) {
-        showActionOutput({ error: e.message });
+        // Key input intentionally preserved so user can retry without re-typing
+        if (isReconfigure) {
+          showEl('reconfig-error-alert', true);
+          setText('reconfig-error-text', e.message);
+        } else {
+          connectErrorDetail = e.message;
+          uiOverrideState = 'connection_failed';
+          renderState(latestState);
+        }
+      } finally {
+        if (isReconfigure) {
+          document.getElementById('btn-submit-reconfig').disabled = false;
+        }
       }
     }
 
-    async function runVerifyConnection() {
+    async function runVerifyConnection(fromStep4 = false) {
+      const btn = document.getElementById(fromStep4 ? 'btn-test-conn' : 'btn-verify-conn');
+      if (btn) btn.disabled = true;
       try {
         const res = await apiCall('/setup/api/actions/verify-connection', 'POST', {});
-        if (res.state_snapshot) renderState(res.state_snapshot);
-        showActionOutput(res.summary || res);
+        uiOverrideState = null;
+        if (res.state_snapshot) {
+          if (!fromStep4 && res.state_snapshot.chatgpt_connection && res.state_snapshot.chatgpt_connection.verified_read_tool_call) {
+            manualStepView = null;
+          }
+          renderState(res.state_snapshot);
+        }
+        if (fromStep4) {
+          const fb = document.getElementById('s4-test-feedback');
+          const ok = Boolean(res.summary && res.summary.chatgpt_verified);
+          fb.className = 'callout ' + (ok ? 'success' : 'warn');
+          fb.textContent = ok ? T('s4TestOk') : T('s4TestWait');
+        }
       } catch (e) {
-        showActionOutput({ error: e.message });
+        if (fromStep4) {
+          const fb = document.getElementById('s4-test-feedback');
+          fb.className = 'callout danger';
+          fb.textContent = e.message;
+        }
+      } finally {
+        if (btn) btn.disabled = false;
       }
     }
 
     async function confirmOwnerAccess(challengeId, level, workspaces) {
+      showEl('s3-error-alert', false);
       try {
         const res = await apiCall('/setup/api/pairing/challenges/' + encodeURIComponent(challengeId) + '/approve', 'POST', {
           approved_permission_level: level,
           approved_workspaces: workspaces,
           activate_profile: true
         });
+        uiOverrideState = null;
+        manualStepView = 4;
         if (res.state_snapshot) renderState(res.state_snapshot);
-        showActionOutput({
-          confirmed: true,
-          challenge_id: challengeId,
-          delegation_id: res.delegation_id,
-          level: res.approved_permission_level,
-          activated_profile: res.activated_profile
-        });
       } catch (e) {
-        showActionOutput({ error: e.message });
+        showEl('s3-error-alert', true);
+        setText('s3-error-text', e.message);
+      }
+    }
+
+    async function denyChallenge(challengeId) {
+      showEl('s3-error-alert', false);
+      try {
+        const res = await apiCall('/setup/api/pairing/challenges/' + encodeURIComponent(challengeId) + '/deny', 'POST', {
+          reason: 'denied_by_owner_in_setup_center'
+        });
+        if (res.state_snapshot) renderState(res.state_snapshot);
+      } catch (e) {
+        showEl('s3-error-alert', true);
+        setText('s3-error-text', e.message);
+      }
+    }
+
+    async function runRevokeAccess() {
+      try {
+        const res = await apiCall('/setup/api/actions/revoke-access', 'POST', { revoke_all: true });
+        showEl('revoke-confirm-wrap', false);
+        showEl('btn-revoke-inline', true);
+        if (res.state_snapshot) renderState(res.state_snapshot);
+        showAdvFeedback('warn', T('stRevokedTitle'));
+      } catch (e) {
+        showAdvFeedback('danger', e.message);
       }
     }
 
@@ -1202,31 +3208,8 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
           reset_emergency_stop: isActive
         });
         if (res.state_snapshot) renderState(res.state_snapshot);
-        showActionOutput({ emergency_stop: !isActive, state: res.state_snapshot ? res.state_snapshot.state : null });
       } catch (e) {
-        showActionOutput({ error: e.message });
-      }
-    }
-
-    async function denyChallenge(challengeId) {
-      try {
-        const res = await apiCall('/setup/api/pairing/challenges/' + encodeURIComponent(challengeId) + '/deny', 'POST', {
-          reason: 'denied_by_owner_in_setup_center'
-        });
-        if (res.state_snapshot) renderState(res.state_snapshot);
-        showActionOutput({ denied: true, challenge_id: challengeId, status: res.status });
-      } catch (e) {
-        showActionOutput({ error: e.message });
-      }
-    }
-
-    async function runRevokeAccess() {
-      try {
-        const res = await apiCall('/setup/api/actions/revoke-access', 'POST', { revoke_all: true });
-        if (res.state_snapshot) renderState(res.state_snapshot);
-        showActionOutput(res.summary || res);
-      } catch (e) {
-        showActionOutput({ error: e.message });
+        showAdvFeedback('danger', e.message);
       }
     }
 
@@ -1234,28 +3217,250 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
       try {
         const res = await apiCall('/setup/api/actions/check-updates', 'POST', {});
         if (res.state_snapshot) renderState(res.state_snapshot);
-        showActionOutput(res.summary || res);
+        const s = res.summary || {};
+        const msg = (currentLang === 'vi' ? s.message_vi : s.message_en) ||
+          (s.update_available ? ('Update: ' + s.latest_version) : ('Current: ' + (s.current_version || 'v1.2.0')));
+        showAdvFeedback(s.update_available ? 'info' : 'success', msg);
       } catch (e) {
-        showActionOutput({ error: e.message });
+        showAdvFeedback('danger', e.message);
+      }
+    }
+
+    async function runRollback() {
+      try {
+        const res = await apiCall('/setup/api/actions/rollback', 'POST', {});
+        if (res.state_snapshot) renderState(res.state_snapshot);
+        const s = res.summary || {};
+        showAdvFeedback('success', (currentLang === 'vi' ? s.message_vi : s.message_en) || 'Rollback complete');
+      } catch (e) {
+        showAdvFeedback('warn', e.message);
       }
     }
 
     async function runUninstall() {
       try {
         const res = await apiCall('/setup/api/actions/uninstall', 'POST', { confirm: true });
+        showEl('uninstall-confirm-wrap', false);
+        showEl('btn-adv-uninstall', true);
+        manualStepView = null;
         if (res.state_snapshot) renderState(res.state_snapshot);
-        showActionOutput(res.summary || res);
+        const s = res.summary || {};
+        showAdvFeedback('warn', (currentLang === 'vi' ? s.message_vi : s.message_en) || 'Uninstalled');
       } catch (e) {
-        showActionOutput({ error: e.message });
+        showAdvFeedback('danger', e.message);
       }
     }
 
+    async function loadRedactedLogs() {
+      try {
+        const res = await apiCall('/setup/api/logs?limit=40', 'GET');
+        const entries = (res && res.entries) || [];
+        const box = document.getElementById('adv-logs-box');
+        if (entries.length === 0) {
+          box.textContent = T('advLogsEmpty');
+          return;
+        }
+        box.textContent = entries.map((e) => {
+          const ts = e.timestamp ? ('[' + e.timestamp + '] ') : '';
+          const src = e.source ? ('(' + e.source + ') ') : '';
+          return ts + src + (e.message || '');
+        }).join('\n');
+      } catch (e) {
+        setText('adv-logs-box', e.message);
+      }
+    }
+
+    async function loginSetupCenter() {
+      const pwdEl = document.getElementById('owner-password');
+      const errEl = document.getElementById('login-error');
+      errEl.textContent = '';
+      try {
+        const res = await apiCall('/console/api/login', 'POST', { password: pwdEl.value });
+        csrfToken = res.csrf_token;
+        pwdEl.value = '';
+        document.getElementById('login-overlay').classList.add('hidden');
+        await refreshSetupState();
+      } catch (e) {
+        errEl.textContent = e.message;
+      }
+    }
+
+    async function logoutSetupCenter() {
+      try { await apiCall('/console/api/logout', 'POST', {}); } catch (_) {}
+      csrfToken = null;
+      closeAdvancedDrawer();
+      document.getElementById('login-overlay').classList.remove('hidden');
+    }
+
+    function openAdvancedDrawer() {
+      showEl('advanced-drawer', true);
+      loadRedactedLogs();
+      document.getElementById('btn-close-advanced').focus();
+    }
+
+    function closeAdvancedDrawer() {
+      showEl('advanced-drawer', false);
+      // Clear sensitive reconfigure input when closing drawer
+      document.getElementById('reconfig-runtime-key').value = '';
+      showEl('reconfig-error-alert', false);
+    }
+
+    async function copyTextToClipboard(text, btn) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+        }
+        if (btn) {
+          const orig = btn.textContent;
+          btn.textContent = T('btnCopied');
+          setTimeout(() => { btn.textContent = orig; }, 1600);
+        }
+      } catch (_) {}
+    }
+
+    function syncModeCardSelection() {
+      const isRo = document.getElementById('mode-radio-auth-none').checked;
+      document.getElementById('mode-card-readonly').classList.toggle('selected', isRo);
+      document.getElementById('mode-card-confirm').classList.toggle('selected', !isRo);
+    }
+
     window.addEventListener('DOMContentLoaded', async () => {
-      applyTranslations();
+      // Wire all DOM events cleanly (zero inline event handlers)
+      document.getElementById('lang-toggle-btn').addEventListener('click', toggleLanguage);
+      document.getElementById('btn-advanced-settings').addEventListener('click', openAdvancedDrawer);
+      document.getElementById('btn-close-advanced').addEventListener('click', closeAdvancedDrawer);
+      document.getElementById('advanced-drawer').addEventListener('click', (ev) => {
+        if (ev.target === ev.currentTarget) closeAdvancedDrawer();
+      });
+      document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape' && !document.getElementById('advanced-drawer').classList.contains('hidden')) {
+          closeAdvancedDrawer();
+        }
+      });
+
+      document.getElementById('login-btn').addEventListener('click', loginSetupCenter);
+      document.getElementById('owner-password').addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') loginSetupCenter();
+      });
+
+      document.getElementById('btn-s1-primary').addEventListener('click', () => {
+        const localOk = Boolean(latestState && latestState.status_table && latestState.status_table.local_service === 'Ready');
+        if (!localOk) {
+          runInstallRepair();
+        } else {
+          manualStepView = 2;
+          renderState(latestState);
+        }
+      });
+
+      document.getElementById('connect-form').addEventListener('submit', (ev) => {
+        ev.preventDefault();
+        submitConnectChatGPT(false);
+      });
+      document.getElementById('btn-toggle-key-vis').addEventListener('click', () => {
+        const inp = document.getElementById('input-runtime-key');
+        inp.type = inp.type === 'password' ? 'text' : 'password';
+        setText('btn-toggle-key-vis', inp.type === 'password' ? T('btnShow') : T('btnHide'));
+      });
+      document.getElementById('mode-radio-auth-none').addEventListener('change', syncModeCardSelection);
+      document.getElementById('mode-radio-oauth').addEventListener('change', syncModeCardSelection);
+      document.getElementById('btn-change-tunnel').addEventListener('click', () => {
+        forceStep2Form = true;
+        uiOverrideState = null;
+        renderState(latestState);
+      });
+      document.getElementById('btn-cancel-change-tunnel').addEventListener('click', () => {
+        document.getElementById('input-runtime-key').value = '';
+        forceStep2Form = false;
+        uiOverrideState = null;
+        renderState(latestState);
+      });
+      document.getElementById('btn-copy-verify-prompt').addEventListener('click', (ev) => {
+        copyTextToClipboard(document.getElementById('s2b-test-prompt').textContent, ev.currentTarget);
+      });
+      document.getElementById('btn-verify-conn').addEventListener('click', () => runVerifyConnection(false));
+
+      document.getElementById('btn-s3-primary').addEventListener('click', () => {
+        const cg = (latestState && latestState.chatgpt_connection) || {};
+        const isViewOnly = !cg.supports_verifiable_owner_identity || cg.last_auth_mode === 'shared_tunnel_bearer';
+        if (isViewOnly) {
+          manualStepView = 4;
+          renderState(latestState);
+        } else {
+          refreshSetupState();
+        }
+      });
+      document.getElementById('btn-s3-secondary').addEventListener('click', () => {
+        const cg = (latestState && latestState.chatgpt_connection) || {};
+        const isViewOnly = !cg.supports_verifiable_owner_identity || cg.last_auth_mode === 'shared_tunnel_bearer';
+        if (isViewOnly) {
+          document.getElementById('mode-radio-oauth').checked = true;
+          syncModeCardSelection();
+          forceStep2Form = true;
+          manualStepView = 2;
+          renderState(latestState);
+        } else {
+          manualStepView = 4;
+          renderState(latestState);
+        }
+      });
+
+      document.getElementById('btn-test-conn').addEventListener('click', () => runVerifyConnection(true));
+      document.querySelectorAll('[data-copy-target]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const targetId = btn.getAttribute('data-copy-target');
+          const el = document.getElementById(targetId);
+          if (el) copyTextToClipboard(el.textContent, btn);
+        });
+      });
+
+      document.getElementById('btn-revoke-inline').addEventListener('click', () => {
+        showEl('btn-revoke-inline', false);
+        showEl('revoke-confirm-wrap', true);
+      });
+      document.getElementById('btn-revoke-cancel').addEventListener('click', () => {
+        showEl('revoke-confirm-wrap', false);
+        showEl('btn-revoke-inline', true);
+      });
+      document.getElementById('btn-revoke-confirm').addEventListener('click', runRevokeAccess);
+      document.getElementById('btn-estop-footer').addEventListener('click', runEmergencyStopToggle);
+
+      // Advanced drawer controls
+      document.getElementById('btn-adv-refresh').addEventListener('click', () => refreshSetupState());
+      document.getElementById('btn-adv-load-logs').addEventListener('click', loadRedactedLogs);
+      document.getElementById('btn-adv-copy-logs').addEventListener('click', (ev) => {
+        copyTextToClipboard(document.getElementById('adv-logs-box').textContent, ev.currentTarget);
+      });
+      document.getElementById('btn-adv-repair').addEventListener('click', runInstallRepair);
+      document.getElementById('btn-adv-updates').addEventListener('click', runCheckUpdates);
+      document.getElementById('btn-adv-rollback').addEventListener('click', runRollback);
+      document.getElementById('btn-submit-reconfig').addEventListener('click', () => submitConnectChatGPT(true));
+      document.getElementById('btn-adv-revoke').addEventListener('click', runRevokeAccess);
+      document.getElementById('btn-adv-estop').addEventListener('click', runEmergencyStopToggle);
+      document.getElementById('btn-adv-logout').addEventListener('click', logoutSetupCenter);
+      document.getElementById('btn-adv-uninstall').addEventListener('click', () => {
+        showEl('btn-adv-uninstall', false);
+        showEl('uninstall-confirm-wrap', true);
+      });
+      document.getElementById('btn-adv-uninstall-cancel').addEventListener('click', () => {
+        showEl('uninstall-confirm-wrap', false);
+        showEl('btn-adv-uninstall', true);
+      });
+      document.getElementById('btn-adv-uninstall-confirm').addEventListener('click', runUninstall);
+
+      // A1 Multi-tab CSRF resync on focus / visibilitychange
+      window.addEventListener('focus', () => { syncCsrfFromState(); });
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) syncCsrfFromState();
+      });
+
+      applyStaticTranslations();
+      syncModeCardSelection();
+
+      // Local Windows-user launcher handoff (#handoff=...)
       const hashStr = window.location.hash || '';
       if (hashStr.startsWith('#handoff=')) {
         const handoffCode = decodeURIComponent(hashStr.slice('#handoff='.length)).trim();
-        // Scrub fragment immediately so single-use code never remains in address bar or history
         if (window.history && window.history.replaceState) {
           window.history.replaceState(null, '', window.location.pathname + window.location.search);
         } else {
@@ -1266,17 +3471,15 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
           if (res && res.authenticated) {
             csrfToken = res.csrf_token;
             document.getElementById('login-overlay').classList.add('hidden');
-            if (res.state_snapshot) {
-              renderState(res.state_snapshot);
-            } else {
-              await refreshSetupState();
-            }
+            if (res.state_snapshot) renderState(res.state_snapshot);
+            else await refreshSetupState();
             return;
           }
         } catch (e) {
           setText('login-error', e.message);
         }
       }
+
       try {
         const st = await apiCall('/setup/api/state', 'GET').catch(() => null);
         if (st && st.ok) {
@@ -1299,7 +3502,7 @@ def register_setup_center_routes(
     *,
     gw: Any,
     authenticate_request: Callable[..., tuple[Any, JSONResponse | None]],
-    create_handoff_web_session: Callable[[str], tuple[Any, bool]] | None = None,
+    create_handoff_web_session: Callable[..., tuple[Any, bool]] | None = None,
     verify_host_and_origin: Callable[[Request], JSONResponse | None] | None = None,
     session_cookie_name: str = "mcp_console_session",
     session_cookie_ttl_seconds: int = 14400,
@@ -1326,6 +3529,9 @@ def register_setup_center_routes(
         "local_service_ready": True,
         "tunnel_info": None,
         "version_state": None,
+        "last_action_revoked": False,
+        "using_fallback_local_override": False,
+        "using_fallback_tunnel_override": False,
     }
     app.state.setup_center_overrides = runtime_overrides
     app.state.setup_center_persistence = pers
@@ -1344,7 +3550,6 @@ def register_setup_center_routes(
         code_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
         expires_at = now + ttl
         with handoff_lock:
-            # Prune expired or used tickets and keep bounded
             stale = [k for k, v in handoff_tickets.items() if v.get("used") or now >= float(v.get("expires_at", 0.0))]
             for k in stale:
                 handoff_tickets.pop(k, None)
@@ -1387,13 +3592,38 @@ def register_setup_center_routes(
         except Exception:
             pass
 
-    def _current_snapshot() -> dict[str, Any]:
+    def _current_snapshot(*, force_live: bool = False) -> dict[str, Any]:
         with state_lock:
-            l_ready = bool(runtime_overrides.get("local_service_ready", True))
-            t_info = runtime_overrides.get("tunnel_info")
+            l_ready_ov = bool(runtime_overrides.get("local_service_ready", True))
+            t_info_ov = runtime_overrides.get("tunnel_info")
             v_info = runtime_overrides.get("version_state")
-        if "tunnel_probe" in hooks and t_info is None:
-            t_info = hooks["tunnel_probe"]()
+            revoked_flag = bool(runtime_overrides.get("last_action_revoked", False))
+            fallback_local = bool(runtime_overrides.get("using_fallback_local_override", False))
+            fallback_tunnel = bool(runtime_overrides.get("using_fallback_tunnel_override", False))
+
+        # A4/A5 Fix: Live probes are authoritative and never masked by sticky runtime_overrides.
+        if "local_service_probe" in hooks and not fallback_local:
+            l_ready = bool(hooks["local_service_probe"]())
+        elif "local_service_probe" in hooks and force_live:
+            l_ready = bool(hooks["local_service_probe"]())
+        else:
+            l_ready = l_ready_ov
+
+        if "tunnel_probe" in hooks:
+            if fallback_tunnel and t_info_ov is not None:
+                t_info = t_info_ov
+            else:
+                t_info = hooks["tunnel_probe"]()
+        elif "connect_chatgpt" in hooks and not fallback_tunnel:
+            # Real hooks are active: probe live tunnel state instead of serving sticky cached override
+            live_t = _default_tunnel_probe(PROJECT_ROOT, port=adapter_port)
+            if t_info_ov is not None and t_info_ov.get("explicit_disconnect"):
+                t_info = t_info_ov
+            else:
+                t_info = live_t
+        else:
+            t_info = t_info_ov
+
         return compute_setup_center_state(
             gw,
             persistence=pers,
@@ -1402,6 +3632,7 @@ def register_setup_center_routes(
             local_service_ready=l_ready,
             tunnel_info=t_info,
             version_state=v_info,
+            last_action_revoked=revoked_flag,
         )
 
     @app.post("/setup/api/local-handoff/issue")
@@ -1436,7 +3667,6 @@ def register_setup_center_routes(
             body = {}
         if not isinstance(body, dict):
             body = {}
-        import math
         try:
             ttl_req = float(body.get("ttl_seconds", 60.0))
         except (TypeError, ValueError):
@@ -1533,7 +3763,13 @@ def register_setup_center_routes(
                 )
             rec["used"] = True
 
-        ws, trust_proxy = create_handoff_web_session(client_host or "127.0.0.1")
+        # A1 Fix: Pass existing session cookie so opening a second tab reuses the valid session & CSRF token.
+        existing_cookie = request.cookies.get(session_cookie_name)
+        try:
+            ws, trust_proxy = create_handoff_web_session(client_host or "127.0.0.1", existing_cookie)
+        except TypeError:
+            ws, trust_proxy = create_handoff_web_session(client_host or "127.0.0.1")
+
         is_https = (request.url.scheme == "https") or (
             trust_proxy and request.headers.get("x-forwarded-proto", "").lower() == "https"
         )
@@ -1586,10 +3822,72 @@ def register_setup_center_routes(
         sess, err_resp = authenticate_request(request, require_csrf=False)
         if err_resp is not None:
             return err_resp
-        snap = _current_snapshot()
+        snap = _current_snapshot(force_live=True)
         if sess is not None and getattr(sess, "csrf_token", None):
             snap["csrf_token"] = sess.csrf_token
         return JSONResponse(status_code=200, content=snap)
+
+    @app.get("/setup/api/logs")
+    async def setup_get_logs(request: Request) -> Response:
+        _, err_resp = authenticate_request(request, require_csrf=False)
+        if err_resp is not None:
+            return err_resp
+
+        try:
+            limit = int(request.query_params.get("limit", "50"))
+        except (TypeError, ValueError):
+            limit = 50
+        limit = max(1, min(200, limit))
+
+        extra_secrets = tuple(
+            s
+            for s in (
+                adm,
+                sk,
+                str(getattr(gw, "_caller_auth_token", "") or ""),
+            )
+            if s and len(s) >= 6
+        )
+
+        entries: list[dict[str, str]] = []
+        audit_obj = getattr(getattr(gw, "policy", None), "audit", None)
+        audit_path = getattr(audit_obj, "log_path", None) or getattr(getattr(gw, "policy", None), "audit_log_path", None)
+        if audit_path is not None:
+            ap = Path(audit_path)
+            if ap.is_file():
+                try:
+                    raw_lines = ap.read_text(encoding="utf-8", errors="replace").splitlines()
+                    for line in raw_lines[-limit:]:
+                        line_s = line.strip()
+                        if not line_s:
+                            continue
+                        try:
+                            obj = json.loads(line_s)
+                            if isinstance(obj, dict):
+                                ts = str(obj.get("timestamp") or obj.get("ts") or "")
+                                tool = str(obj.get("tool_name") or obj.get("event") or "audit")
+                                dec = str(obj.get("decision") or "INFO")
+                                rsn = str(obj.get("reason") or "")
+                                msg = _scrub_log_text(f"[{dec}] {tool}: {rsn}".strip(), extra_secrets)
+                                entries.append({"timestamp": ts, "source": "audit", "level": dec, "message": msg})
+                                continue
+                        except Exception:
+                            pass
+                        entries.append(
+                            {
+                                "timestamp": "",
+                                "source": "audit",
+                                "level": "INFO",
+                                "message": _scrub_log_text(line_s, extra_secrets),
+                            }
+                        )
+                except Exception:
+                    pass
+
+        return JSONResponse(
+            status_code=200,
+            content={"ok": True, "count": len(entries), "entries": entries[-limit:]},
+        )
 
     @app.get("/setup/api/pairing/challenges")
     async def setup_list_challenges(request: Request) -> Response:
@@ -1685,6 +3983,9 @@ def register_setup_center_routes(
                 content={"ok": False, "error": "invalid_request", "error_description": str(exc)},
             )
 
+        with state_lock:
+            runtime_overrides["last_action_revoked"] = False
+
         activated_profile = None
         if bool(body.get("activate_profile", False)):
             req_target_prof = str(body.get("target_profile") or "").strip()
@@ -1704,7 +4005,6 @@ def register_setup_center_routes(
             if not (hasattr(gw, "is_emergency_stop_active") and gw.is_emergency_stop_active()):
                 if hasattr(gw, "switch_policy_profile"):
                     gw.switch_policy_profile(eff_target_prof, reason="setup_center_single_button_confirm")
-                # Auto-align approved workspaces on policy roots (never adding sensitive paths)
                 approved_ws = body.get("approved_workspaces") or res.get("approved_workspaces") or []
                 if isinstance(approved_ws, list) and getattr(gw, "policy", None) is not None:
                     for ws_item in approved_ws:
@@ -1797,7 +4097,16 @@ def register_setup_center_routes(
             body = {}
 
         if "install_repair" in hooks:
-            hook_res = await asyncio.to_thread(hooks["install_repair"], body)
+            try:
+                hook_res = await asyncio.to_thread(hooks["install_repair"], body)
+            except Exception as exc:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "install_repair_failed", "error_description": redact_secrets(str(exc))},
+                )
+            with state_lock:
+                runtime_overrides["local_service_ready"] = bool(hook_res.get("local_service_ready", True))
+                runtime_overrides["using_fallback_local_override"] = False
         else:
             hook_res = {
                 "action": "install_repair",
@@ -1806,8 +4115,9 @@ def register_setup_center_routes(
                 "message_en": "Local MCP service health and HTTP 401 authentication boundary verified.",
                 "message_vi": "Đã xác minh dịch vụ MCP cục bộ và ranh giới chặn truy cập ẩn danh HTTP 401.",
             }
-        with state_lock:
-            runtime_overrides["local_service_ready"] = bool(hook_res.get("local_service_ready", True))
+            with state_lock:
+                runtime_overrides["local_service_ready"] = True
+                runtime_overrides["using_fallback_local_override"] = True
 
         gw.policy.audit.log_event(
             tool_name="setup_center_install_repair",
@@ -1818,7 +4128,7 @@ def register_setup_center_routes(
         )
         return JSONResponse(
             status_code=200,
-            content={"ok": True, "summary": redact_secrets(hook_res), "state_snapshot": _current_snapshot()},
+            content={"ok": True, "summary": redact_secrets(hook_res), "state_snapshot": _current_snapshot(force_live=True)},
         )
 
     # ------------------------------------------------------------------
@@ -1835,7 +4145,7 @@ def register_setup_center_routes(
         if not isinstance(body, dict):
             return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid JSON body"})
 
-        tunnel_id = str(body.get("tunnel_id") or "").strip()
+        tunnel_id = str(body.get("tunnel_id") or "").strip().lower()
         runtime_api_key = str(body.get("runtime_api_key") or "").strip()
         auth_mode = str(body.get("auth_mode") or "oauth").strip().lower()
         if auth_mode not in ("oauth", "auth_none"):
@@ -1843,7 +4153,6 @@ def register_setup_center_routes(
                 status_code=400,
                 content={"ok": False, "error": "invalid_auth_mode", "error_description": "auth_mode must be 'oauth' or 'auth_none'."},
             )
-        # Immediately remove raw key from dict so it can never be logged or serialized
         body.pop("runtime_api_key", None)
 
         if not TUNNEL_ID_REGEX.match(tunnel_id):
@@ -1887,6 +4196,7 @@ def register_setup_center_routes(
                     status_code=400,
                     content={"ok": False, "error": "tunnel_setup_failed", "error_description": redact_secrets(str(exc))},
                 )
+            used_fallback = False
         else:
             hook_res = {
                 "action": hook_key,
@@ -1899,11 +4209,9 @@ def register_setup_center_routes(
                 "message_en": "Tunnel runtime ready; ChatGPT tool call NOT verified yet. Run a read-only prompt in ChatGPT next.",
                 "message_vi": "Tunnel đã sẵn sàng; chưa xác minh lệnh gọi công cụ từ ChatGPT. Hãy chạy câu lệnh đọc thử trong ChatGPT.",
             }
-        # Wipe secret reference
+            used_fallback = True
         runtime_api_key = ""
 
-        # Reconfiguring or connecting a new tunnel clears stale ChatGPT tool call verification
-        # unless the hook explicitly preserves it on a failed rolled-back reconfiguration.
         if is_reconfigure and not hook_res.get("rolled_back", False):
             try:
                 with pers._db() as conn:
@@ -1912,12 +4220,18 @@ def register_setup_center_routes(
                 pass
 
         with state_lock:
-            runtime_overrides["tunnel_info"] = {
-                "connected": bool(hook_res.get("readyz_ok", True)),
-                "configured": True,
-                "readyz_ok": bool(hook_res.get("readyz_ok", True)),
-                "status_code": str(hook_res.get("status") or "TUNNEL_READY"),
-            }
+            if used_fallback:
+                runtime_overrides["tunnel_info"] = {
+                    "connected": bool(hook_res.get("readyz_ok", True)),
+                    "configured": True,
+                    "readyz_ok": bool(hook_res.get("readyz_ok", True)),
+                    "status_code": str(hook_res.get("status") or "TUNNEL_READY"),
+                }
+                runtime_overrides["using_fallback_tunnel_override"] = True
+            else:
+                # Real hook active: clear sticky override so live probe reflects true tunnel status
+                runtime_overrides["tunnel_info"] = None
+                runtime_overrides["using_fallback_tunnel_override"] = False
 
         safe_summary = redact_secrets({k: v for k, v in hook_res.items() if k != "runtime_api_key"})
         gw.policy.audit.log_event(
@@ -1929,7 +4243,7 @@ def register_setup_center_routes(
         )
         return JSONResponse(
             status_code=200,
-            content={"ok": True, "summary": safe_summary, "state_snapshot": _current_snapshot()},
+            content={"ok": True, "summary": safe_summary, "state_snapshot": _current_snapshot(force_live=True)},
         )
 
     @app.post("/setup/api/actions/connect-chatgpt")
@@ -1949,7 +4263,7 @@ def register_setup_center_routes(
         if err_resp is not None:
             return err_resp
 
-        snap = _current_snapshot()
+        snap = _current_snapshot(force_live=True)
         cg = snap["chatgpt_connection"]
         verified = bool(cg["verified_read_tool_call"])
         summary = {
@@ -2040,6 +4354,9 @@ def register_setup_center_routes(
         elif bool(body.get("reset_emergency_stop", False)):
             gw.reset_emergency_stop()
             await asyncio.to_thread(_sync_external_adapter_owner_endpoint, "/oauth/owner/emergency-stop/reset", {"reason": reason})
+        elif revoke_all or delegation_id or grant_id or client_id:
+            with state_lock:
+                runtime_overrides["last_action_revoked"] = True
 
         gw.policy.audit.log_event(
             tool_name="setup_center_revoke_access",
@@ -2085,7 +4402,13 @@ def register_setup_center_routes(
             )
 
         if "check_updates" in hooks:
-            hook_res = await asyncio.to_thread(hooks["check_updates"], body)
+            try:
+                hook_res = await asyncio.to_thread(hooks["check_updates"], body)
+            except Exception as exc:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "check_updates_failed", "error_description": redact_secrets(str(exc))},
+                )
             latest_ver = str(hook_res.get("latest_version") or candidate_ver or current_ver)
         else:
             latest_ver = candidate_ver or current_ver
@@ -2122,6 +4445,56 @@ def register_setup_center_routes(
         )
 
     # ------------------------------------------------------------------
+    # Action 9 (Phase D / A5): Rollback (Verified Backup Snapshots Only)
+    # ------------------------------------------------------------------
+    @app.post("/setup/api/actions/rollback")
+    async def setup_action_rollback(request: Request) -> Response:
+        _, err_resp = authenticate_request(request, require_csrf=True)
+        if err_resp is not None:
+            return err_resp
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid JSON body"})
+
+        if "rollback" not in hooks:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "error": "no_rollback_snapshot",
+                    "error_description": "No verified rollback hook or backup snapshot is available.",
+                },
+            )
+
+        try:
+            hook_res = await asyncio.to_thread(hooks["rollback"], body)
+        except Exception as exc:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": "rollback_failed", "error_description": redact_secrets(str(exc))},
+            )
+
+        with state_lock:
+            runtime_overrides["tunnel_info"] = None
+            runtime_overrides["using_fallback_tunnel_override"] = False
+
+        safe_summary = redact_secrets(hook_res)
+        gw.policy.audit.log_event(
+            tool_name="setup_center_rollback",
+            tier="SECURITY",
+            decision="ALLOW",
+            reason="Executed verified rollback from WinOwner Setup Center",
+            result_summary=safe_summary,
+        )
+        return JSONResponse(
+            status_code=200,
+            content={"ok": True, "summary": safe_summary, "state_snapshot": _current_snapshot(force_live=True)},
+        )
+
+    # ------------------------------------------------------------------
     # Action 8: Uninstall (Verified Tasks Only, Preserves User Secrets)
     # ------------------------------------------------------------------
     @app.post("/setup/api/actions/uninstall")
@@ -2144,7 +4517,14 @@ def register_setup_center_routes(
             )
 
         if "uninstall" in hooks:
-            hook_res = await asyncio.to_thread(hooks["uninstall"], body)
+            try:
+                hook_res = await asyncio.to_thread(hooks["uninstall"], body)
+            except Exception as exc:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "uninstall_failed", "error_description": redact_secrets(str(exc))},
+                )
+            used_fallback = False
         else:
             hook_res = {
                 "action": "uninstall",
@@ -2153,9 +4533,11 @@ def register_setup_center_routes(
                 "message_en": "Verified local MCP service and tunnel tasks stopped and unregistered. Local user data and keys are preserved.",
                 "message_vi": "Đã dừng và gỡ tác vụ MCP cục bộ cùng tunnel đã xác minh. Dữ liệu và khóa riêng trên máy vẫn được giữ an toàn.",
             }
+            used_fallback = True
 
         with state_lock:
             runtime_overrides["local_service_ready"] = False
+            runtime_overrides["using_fallback_local_override"] = used_fallback
             runtime_overrides["tunnel_info"] = {
                 "connected": False,
                 "configured": False,
@@ -2163,6 +4545,7 @@ def register_setup_center_routes(
                 "explicit_disconnect": True,
                 "status_code": "TUNNEL_TASK_REMOVED",
             }
+            runtime_overrides["using_fallback_tunnel_override"] = used_fallback
 
         gw.policy.audit.log_event(
             tool_name="setup_center_uninstall",

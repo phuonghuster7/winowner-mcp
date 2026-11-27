@@ -1017,3 +1017,327 @@ def test_run_winowner_live_setup_center_tunnel_hooks_and_ttl_validation():
     finally:
         shutil.rmtree(td, ignore_errors=True)
 
+
+def test_fluent_four_step_wizard_zero_jargon_and_zero_innerhtml_anywhere():
+    """Phase B/C/D: Verify Fluent Light 4-step wizard, zero banned jargon on Steps 1-4, and zero innerHTML anywhere in setup_center.py."""
+    import re
+
+    setup_src = (PROJECT_ROOT / "mcp-gateway" / "setup_center.py").read_text(encoding="utf-8")
+    # Hard security invariant: zero innerHTML (even in comments) and zero localStorage.setItem anywhere in setup_center.py
+    assert "innerHTML" not in setup_src
+    assert "localStorage.setItem" not in setup_src
+
+    env = _build_dual_surface_env(profile="read_only")
+    try:
+        html = env["console_client"].get("/setup").text
+
+        # Fluent Light Design System tokens & layout geometry
+        for token in (
+            "--canvas: #f3f3f3",
+            "--surface: #ffffff",
+            "--accent: #0067c0",
+            "max-width: 560px",
+            'id="lang-toggle-btn"',
+            'id="btn-advanced-settings"',
+            'id="stepper-container"',
+            'id="wizard-main"',
+            'id="step-view-1"',
+            'id="step-view-2"',
+            'id="step-view-3"',
+            'id="step-view-4"',
+            'id="advanced-drawer"',
+            'class="drawer-backdrop hidden"',
+            'data-ui-state="loading"',
+            ":focus-visible",
+            "prefers-reduced-motion",
+            "Chuẩn bị máy tính của bạn",
+            "Preparing your computer",
+            "Kết nối máy tính với ChatGPT",
+            "Connect your computer to ChatGPT",
+            "Cho phép ChatGPT sử dụng máy tính",
+            "Allow ChatGPT to use your computer",
+            "Máy tính của bạn đã kết nối!",
+            "Your computer is connected!",
+            "Chỉ xem (mặc định)",
+            "Cho phép thao tác khi tôi xác nhận",
+            "Kết nối đang được thiết lập...",
+            "Chưa thể kết nối. Vui lòng thử lại.",
+            "https://chatgpt.com",
+            "Cài đặt nâng cao",
+            "Advanced Settings",
+        ):
+            assert token in html, f"Missing expected Fluent wizard marker: {token}"
+
+        # Verify Steps 1-4 main wizard markup (<main id="wizard-main">...</main>) has ZERO banned jargon or <pre> dumps
+        m = re.search(r'<main[^>]*id="wizard-main"[^>]*>(.*?)</main>', html, re.S)
+        assert m is not None, "Could not locate <main id='wizard-main'>"
+        wizard_markup = m.group(1)
+        banned_in_main_steps = (
+            "127.0.0.1",
+            "8767",
+            "8768",
+            "19768",
+            "HTTP 401",
+            "OAuth DB",
+            "OAuth 2.1",
+            "PKCE",
+            "Client ID",
+            "Bearer token",
+            "Runtime state",
+            "WinOwnerMCP-",
+            "WinOwnerTunnel-",
+            "agent_system_status",
+            "delegation_id",
+            "TTL: 3600s",
+            "LOCAL_READY",
+            "CHATGPT_CONNECTED",
+            "OWNER_VERIFIED",
+            "OWNER_CONTROL_READY",
+            "read_only",
+            "owner_full_control",
+            "<pre",
+        )
+        for bad in banned_in_main_steps:
+            assert bad not in wizard_markup, f"Banned technical jargon leaked into main Steps 1-4 markup: {bad}"
+
+        # Verify A1 JS fixes: API key cleared ONLY after apiCall succeeds (never before), plus 403 CSRF auto-resync & focus hook
+        submit_fn_match = re.search(r"async function submitConnectChatGPT\(isReconfigure\)\s*\{(.*?)\n    \}", html, re.S)
+        assert submit_fn_match is not None
+        submit_fn_body = submit_fn_match.group(1)
+        api_call_pos = submit_fn_body.find("await apiCall(ep, 'POST'")
+        key_wipe_pos = submit_fn_body.find("keyEl.value = ''")
+        assert api_call_pos != -1 and key_wipe_pos != -1
+        assert key_wipe_pos > api_call_pos, "keyEl.value must ONLY be wiped AFTER await apiCall() succeeds!"
+        assert 'id="s2-error-alert" class="callout danger hidden" role="alert"' in html
+        assert "res.status === 403" in html
+        assert "window.addEventListener('focus'" in html
+        assert "visibilitychange" in html
+
+        # Verify all 9 distinct UI states exist in JS / HTML
+        for state_name in (
+            "loading",
+            "connecting",
+            "connection_failed",
+            "waiting_authorization",
+            "revoked",
+            "expired",
+            "emergency_stopped",
+            "offline",
+            "reconnecting",
+        ):
+            assert state_name in html, f"Missing UI state handling for: {state_name}"
+
+        # Verify Advanced Settings drawer contains all required diagnostic & maintenance controls
+        drawer_m = re.search(r'id="advanced-drawer".*?<script>', html, re.S)
+        assert drawer_m is not None
+        drawer_html = drawer_m.group(0)
+        for adv_id in (
+            'id="val-local-service"',
+            'id="val-tunnel"',
+            'id="val-chatgpt"',
+            'id="val-owner"',
+            'id="val-permissions"',
+            'id="val-version"',
+            'id="adv-logs-box"',
+            'id="btn-adv-repair"',
+            'id="btn-adv-updates"',
+            'id="btn-adv-rollback"',
+            'id="btn-submit-reconfig"',
+            'id="btn-adv-revoke"',
+            'id="btn-adv-estop"',
+            'id="btn-adv-logout"',
+            'id="btn-adv-uninstall"',
+        ):
+            assert adv_id in drawer_html, f"Missing Advanced Settings control: {adv_id}"
+    finally:
+        shutil.rmtree(env["td"], ignore_errors=True)
+
+
+def test_nine_lifecycle_ui_states_logs_redaction_rollback_and_live_probes():
+    """Phase D/E + A4/A5: Verify backend ui_state transitions (incl. expired/revoked/estop/offline/reconnecting), GET /setup/api/logs redaction, POST /setup/api/actions/rollback, and live probe freshness."""
+    env = _build_dual_surface_env(profile="owner_full_control")
+    try:
+        a_client = env["adapter_client"]
+        gw = env["gw"]
+        ws = env["ws"]
+        pers = a_client.app.state.oauth_persistence
+
+        live_state = {
+            "local_ok": True,
+            "tunnel": {
+                "connected": False,
+                "configured": False,
+                "readyz_ok": False,
+                "status_code": "TUNNEL_NOT_CONFIGURED",
+            },
+        }
+        rollback_calls: list[dict[str, Any]] = []
+
+        def _fake_connect(payload: dict[str, Any]) -> dict[str, Any]:
+            live_state["tunnel"] = {
+                "connected": True,
+                "configured": True,
+                "readyz_ok": True,
+                "status_code": "TUNNEL_READY",
+            }
+            return {
+                "action": "connect_chatgpt",
+                "tunnel_id": payload["tunnel_id"],
+                "auth_mode": payload["auth_mode"],
+                "status": "TUNNEL_SETUP_PASS",
+                "readyz_ok": True,
+            }
+
+        def _fake_rollback(payload: dict[str, Any]) -> dict[str, Any]:
+            rollback_calls.append(dict(payload))
+            return {
+                "action": "rollback",
+                "status": "TUNNEL_ROLLBACK_PASS",
+                "rollback_verified": True,
+                "secrets_preserved": True,
+                "message_en": "Restored verified tunnel backup.",
+                "message_vi": "Đã khôi phục bản sao lưu tunnel đã xác minh.",
+            }
+
+        c_app = create_web_console_app(
+            gateway=gw,
+            owner_password=TEST_CONSOLE_SECRET,
+            oauth_persistence=pers,
+            oauth_signing_key=TEST_OAUTH_SIGNING_KEY,
+            owner_admin_token=TEST_OWNER_ADMIN_TOKEN,
+            db_path=env["paths"].oauth_db_path,
+            setup_action_hooks={
+                "local_service_probe": lambda: live_state["local_ok"],
+                "tunnel_probe": lambda: dict(live_state["tunnel"]),
+                "connect_chatgpt": _fake_connect,
+                "rollback": _fake_rollback,
+            },
+        )
+        c_client = TestClient(c_app)
+        csrf = _login_setup_center(c_client)
+        csrf_hdr = {"X-CSRF-Token": csrf}
+
+        # 1. Offline state when live local_service_probe flips False
+        live_state["local_ok"] = False
+        st_off = c_client.get("/setup/api/state").json()
+        assert st_off["state"] == "LOCAL_ERROR"
+        assert st_off["ui_state"] == "offline"
+
+        # Restore local_ok -> live probe immediately reflects Ready (never masked by sticky override)
+        live_state["local_ok"] = True
+        st_ready = c_client.get("/setup/api/state").json()
+        assert st_ready["state"] == "LOCAL_READY"
+        assert st_ready["ui_state"] == "setup_connect"
+
+        # 2. Uppercase Tunnel ID normalized + live tunnel probe reflects subsequent disconnection (no sticky override!)
+        r_conn = c_client.post(
+            "/setup/api/actions/connect-chatgpt",
+            headers=csrf_hdr,
+            json={
+                "tunnel_id": "TUNNEL_1234567890ABCDEF1234567890ABCDEF",
+                "runtime_api_key": "rk_uppercase_test_secret_never_logged_12345678",
+                "auth_mode": "oauth",
+            },
+        )
+        assert r_conn.status_code == 200, r_conn.text
+        assert r_conn.json()["summary"]["tunnel_id"] == "tunnel_1234567890abcdef1234567890abcdef"
+        assert r_conn.json()["state_snapshot"]["status_table"]["tunnel"] == "Connected"
+
+        # Simulate tunnel dropping into reconnecting, then connection_failed -> verify-connection reflects live probe!
+        live_state["tunnel"] = {"connected": False, "configured": True, "readyz_ok": False, "status_code": "TUNNEL_NOT_READY"}
+        st_reconn = c_client.post("/setup/api/actions/verify-connection", headers=csrf_hdr, json={}).json()["state_snapshot"]
+        assert st_reconn["status_table"]["tunnel"] == "Disconnected"
+        assert st_reconn["ui_state"] == "reconnecting"
+
+        live_state["tunnel"] = {"connected": False, "configured": True, "readyz_ok": False, "status_code": "TUNNEL_FAILED"}
+        st_fail = c_client.get("/setup/api/state").json()
+        assert st_fail["ui_state"] == "connection_failed"
+
+        live_state["tunnel"] = {"connected": True, "configured": True, "readyz_ok": True, "status_code": "TUNNEL_READY"}
+
+        # 3. Waiting authorization -> Owner ready -> Emergency Stop -> Revoked -> Expired
+        cid, tok = _register_oauth_client_and_token(a_client, "State Machine Client")
+        mcp_hdr = _mcp_init_and_headers(a_client, tok)
+        a_client.post(
+            "/mcp",
+            headers=mcp_hdr,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "agent_read_file", "arguments": {"workspace_root": str(ws), "path": "hello.txt"}},
+            },
+        )
+        ch = a_client.post(
+            "/oauth/pairing/request",
+            headers={"Authorization": f"Bearer {tok}"},
+            json={"requested_permission_level": "SCOPED", "requested_workspaces": [str(ws)], "requested_ttl_seconds": 60},
+        ).json()
+        st_wait = c_client.get("/setup/api/state").json()
+        assert st_wait["ui_state"] == "waiting_authorization"
+
+        c_client.post(
+            f"/setup/api/pairing/challenges/{ch['challenge_id']}/approve",
+            headers=csrf_hdr,
+            json={"approved_permission_level": "SCOPED", "approved_workspaces": [str(ws)], "approved_ttl_seconds": 60, "activate_profile": True},
+        )
+        st_ctrl = c_client.get("/setup/api/state").json()
+        assert st_ctrl["state"] == "OWNER_CONTROL_READY"
+        assert st_ctrl["ui_state"] == "ready_owner_control"
+
+        # Emergency Stop -> emergency_stopped
+        c_client.post("/setup/api/actions/revoke-access", headers=csrf_hdr, json={"revoke_all": False, "engage_emergency_stop": True})
+        assert c_client.get("/setup/api/state").json()["ui_state"] == "emergency_stopped"
+        c_client.post("/setup/api/actions/revoke-access", headers=csrf_hdr, json={"revoke_all": False, "reset_emergency_stop": True})
+
+        # Simulate expired delegation & grant in SQLite -> ui_state == "expired"
+        past_ts = time.time() - 10.0
+        with pers._db() as conn:
+            conn.execute("UPDATE owner_durable_delegations SET expires_at = ? WHERE owner_id = 'local_owner'", (past_ts,))
+            conn.execute("UPDATE owner_capability_grants SET expires_at = ? WHERE owner_id = 'local_owner'", (past_ts,))
+        st_exp = c_client.get("/setup/api/state").json()
+        assert st_exp["last_delegation_status"] == "expired"
+        assert st_exp["ui_state"] == "expired"
+
+        # Revoke access -> ui_state == "revoked"
+        c_client.post("/setup/api/actions/revoke-access", headers=csrf_hdr, json={"revoke_all": True})
+        st_rev = c_client.get("/setup/api/state").json()
+        assert st_rev["ui_state"] == "revoked"
+
+        # 4. POST /setup/api/actions/rollback wired to real hook
+        rb_res = c_client.post("/setup/api/actions/rollback", headers=csrf_hdr, json={"scope": "tunnel"})
+        assert rb_res.status_code == 200, rb_res.text
+        assert rb_res.json()["summary"]["status"] == "TUNNEL_ROLLBACK_PASS"
+        assert len(rollback_calls) == 1
+
+        # Without rollback hook -> fail closed HTTP 400 (never fake rollback PASS)
+        no_rb_client = env["console_client"]
+        no_rb_csrf = _login_setup_center(no_rb_client)
+        rb_missing = no_rb_client.post("/setup/api/actions/rollback", headers={"X-CSRF-Token": no_rb_csrf}, json={})
+        assert rb_missing.status_code == 400
+        assert rb_missing.json()["error"] == "no_rollback_snapshot"
+
+        # 5. GET /setup/api/logs requires auth and scrubs all secret patterns & runtime keys
+        unauth_logs = TestClient(c_app).get("/setup/api/logs")
+        assert unauth_logs.status_code == 401
+
+        secret_probe = "rk_super_secret_leaked_in_audit_999888777"
+        gw.policy.audit.log_event(
+            tool_name="log_redaction_probe",
+            tier="SECURITY",
+            decision="ALLOW",
+            reason=f"Bearer {TEST_TUNNEL_BEARER} key={secret_probe} adm={TEST_OWNER_ADMIN_TOKEN}",
+        )
+        logs_res = c_client.get("/setup/api/logs?limit=20")
+        assert logs_res.status_code == 200, logs_res.text
+        logs_text = logs_res.text
+        assert logs_res.json()["count"] >= 1
+        assert secret_probe not in logs_text
+        assert TEST_TUNNEL_BEARER not in logs_text
+        assert TEST_OWNER_ADMIN_TOKEN not in logs_text
+        assert TEST_OAUTH_SIGNING_KEY not in logs_text
+        assert "[REDACTED]" in logs_text
+    finally:
+        shutil.rmtree(env["td"], ignore_errors=True)
+
+

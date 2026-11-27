@@ -40,20 +40,22 @@ Authentication None không có nghĩa là bỏ xác thực phía máy; HTTP 401 
 
 `Allow all tools` giảm yêu cầu xác nhận nhưng tăng rủi ro, không cấp quyền owner và không bắt buộc để kết nối. Giữ xác nhận cho thao tác nhạy cảm.
 
-## 5. Hành trình 4 bước & Kiểm tra kết nối
+## 5. Trình hướng dẫn 4 bước & Kiểm tra kết nối
+
+Nhấp đúp `Open-SetupCenter.cmd` để đi theo 4 bước trực quan (**Cài đặt -> Kết nối -> Xác nhận quyền -> Sẵn sàng**); các công cụ kỹ thuật (chẩn đoán, nhật ký, cập nhật, khôi phục, gỡ cài đặt) nằm gọn trong **Cài đặt nâng cao**:
 
 | Bước / Kết quả | Ý nghĩa xác minh thực tế |
 |---|---|
 | `LOCAL_READY` (`LOCAL_INSTALL_PASS` / `CHECK_PASS`) | Dịch vụ và chặn ẩn danh HTTP 401 cục bộ sẵn sàng |
-| `TUNNEL_READY` (`TUNNEL_SETUP_PASS`) | Tunnel sẵn sàng tại máy (chưa tính là đã nối ChatGPT) |
+| `TUNNEL_READY` (`TUNNEL_SETUP_PASS`) | Đường truyền sẵn sàng tại máy (chưa tính là đã nối ChatGPT) |
 | `CHATGPT_CONNECTED` | ChatGPT gọi thành công công cụ chỉ đọc thật |
 | `OWNER_VERIFIED` -> `OWNER_CONTROL_READY` | Chủ máy phê duyệt yêu cầu ghép nối OAuth 2.1 một lần trên máy |
 
 ```mermaid
 flowchart LR
   A["1. Cài đặt<br/>LOCAL_READY"] --> B["2. Kết nối<br/>CHATGPT_CONNECTED"]
-  B --> C["3. Xác nhận một lần<br/>OWNER_VERIFIED"]
-  C --> D["4. Sử dụng đầy đủ<br/>OWNER_CONTROL_READY"]
+  B --> C["3. Xác nhận quyền<br/>OWNER_VERIFIED"]
+  C --> D["4. Sẵn sàng<br/>OWNER_CONTROL_READY"]
 ```
 
 ## Xử lý sự cố và ngắt kết nối
