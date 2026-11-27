@@ -1127,6 +1127,20 @@ def test_fluent_four_step_wizard_zero_jargon_and_zero_innerhtml_anywhere():
         ):
             assert state_name in html, f"Missing UI state handling for: {state_name}"
 
+        # Verify inline <script> has zero JS SyntaxError (e.g. unescaped newline in Python triple-quoted string)
+        script_m = re.search(r"<script>(.*?)</script>", html, re.S)
+        assert script_m is not None, "Missing inline <script> block in /setup"
+        js_code = script_m.group(1)
+        assert "join('\n')" not in js_code
+        node_bin = shutil.which("node")
+        if node_bin:
+            import subprocess
+
+            js_tmp = Path(env["td"]) / "setup_center_check.js"
+            js_tmp.write_text(js_code, encoding="utf-8")
+            chk = subprocess.run([node_bin, "--check", str(js_tmp)], capture_output=True, text=True, timeout=15)
+            assert chk.returncode == 0, f"Inline JS syntax error in /setup: {chk.stderr}"
+
         # Verify Advanced Settings drawer contains all required diagnostic & maintenance controls
         drawer_m = re.search(r'id="advanced-drawer".*?<script>', html, re.S)
         assert drawer_m is not None

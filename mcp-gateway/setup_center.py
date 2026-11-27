@@ -3264,7 +3264,7 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
           const ts = e.timestamp ? ('[' + e.timestamp + '] ') : '';
           const src = e.source ? ('(' + e.source + ') ') : '';
           return ts + src + (e.message || '');
-        }).join('\n');
+        }).join('\\n');
       } catch (e) {
         setText('adv-logs-box', e.message);
       }

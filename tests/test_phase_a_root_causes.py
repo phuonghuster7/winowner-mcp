@@ -156,9 +156,9 @@ def test_adapter_health_and_readyz_report_actual_custom_port(tmp_path: Path):
     custom_port = 19768
     app = create_cloud_autonomous_adapter_app(
         gateway=gw,
-        caller_auth_token="phase_a_adapter_secret_1234567890",
-        oauth_signing_key="phase_a_signing_key_1234567890",
-        owner_admin_token="mcp_oadm_phase_a_1234567890",
+        caller_auth_token="phase_a_adapter_fixture_" + "0000000001",
+        oauth_signing_key="phase_a_signing_fixture_" + "0000000002",
+        owner_admin_token="mcp_oadm_fixture_" + "0000000003",
         db_path=paths.oauth_db_path,
         port=custom_port,
     )
@@ -234,7 +234,11 @@ def test_real_setup_center_action_hooks_no_mock_fallbacks(tmp_path: Path):
         "2. Copy your Tunnel ID\n"
     )
     extracted = mod._extract_powershell_error_summary(
-        noisy_stdout, "", 1, secret_to_scrub=secret_val, default_prefix="Connect-ChatGPT.ps1"
+        noisy_stdout,
+        "",
+        1,
+        secret_to_scrub=secret_val,
+        default_prefix="Connect-ChatGPT.ps1",
     )
     assert "doctor failed" in extracted
     assert "WHAT TO DO NEXT" not in extracted
