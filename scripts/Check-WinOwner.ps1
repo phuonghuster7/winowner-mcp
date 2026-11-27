@@ -116,7 +116,8 @@ try {
         $pyw = Join-Path $root ".venv\Scripts\pythonw.exe"
         $mcpRunner = Join-Path $root "scripts\Run-WinOwnerMcp.py"
         if ((Test-Path -LiteralPath $pyw) -and (Test-Path -LiteralPath $mcpRunner)) {
-            Start-Process -FilePath $pyw -ArgumentList @("-u", ('"{0}"' -f $mcpRunner), "--port", "$Port", "--profile", "$($health.profile)", "--setup-center", "--open-browser") -WorkingDirectory $root -WindowStyle Hidden
+            $consolePort = if ($Port -eq 8768) { 8767 } else { [Math]::Max(1024, $Port - 1) }
+            Start-Process -FilePath $pyw -ArgumentList @("-u", ('"{0}"' -f $mcpRunner), "--port", "$Port", "--console-port", "$consolePort", "--profile", "$($health.profile)", "--open-setup") -WorkingDirectory $root -WindowStyle Hidden
         }
     }
 

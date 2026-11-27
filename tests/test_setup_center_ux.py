@@ -612,3 +612,407 @@ def test_setup_center_emergency_stop_and_check_winowner_script_contract():
     finally:
         shutil.rmtree(env["td"], ignore_errors=True)
 
+
+def test_local_windows_user_handoff_zero_manual_admin_key_and_security_guards():
+    """Track UX-2: Single-use current-Windows-user loopback handoff eliminates manual Admin Key while enforcing strict guards."""
+    env = _build_dual_surface_env(profile="read_only")
+    try:
+        c_client = env["console_client"]
+        console_app = c_client.app
+
+        # 1. /setup HTML starts with login-overlay hidden (fallback only) and wires single-button confirmation & handoff scrub
+        ui = c_client.get("/setup")
+        assert ui.status_code == 200
+        assert 'id="login-overlay" class="hidden"' in ui.text
+        assert "Open-SetupCenter.cmd" in ui.text
+        assert "/setup/api/local-handoff" in ui.text
+        assert "history.replaceState" in ui.text
+        assert "Xác nhận cấp quyền chủ máy" in ui.text
+        assert "Confirm Owner Access" in ui.text
+        assert "Emergency Stop" in ui.text
+        assert TEST_CONSOLE_SECRET not in ui.text
+        assert TEST_OWNER_ADMIN_TOKEN not in ui.text
+        assert TEST_TUNNEL_BEARER not in ui.text
+
+        # 2. /setup/api/local-handoff/issue rejects unauthenticated, shared tunnel bearer, cross-origin, and non-loopback
+        assert c_client.post("/setup/api/local-handoff/issue", json={}).status_code == 401
+        tunnel_try = c_client.post(
+            "/setup/api/local-handoff/issue",
+            headers={"X-MCP-Owner-Admin-Token": TEST_TUNNEL_BEARER},
+            json={},
+        )
+        assert tunnel_try.status_code == 403
+        assert tunnel_try.json()["error"] == "FORBIDDEN_TUNNEL_CREDENTIAL"
+
+        evil_origin_issue = c_client.post(
+            "/setup/api/local-handoff/issue",
+            headers={"X-MCP-Owner-Admin-Token": TEST_OWNER_ADMIN_TOKEN, "Origin": "https://evil.example.com"},
+            json={},
+        )
+        assert evil_origin_issue.status_code == 403
+
+        non_loopback_client = TestClient(console_app, client=("192.0.2.99", 54321))
+        non_lb_issue = non_loopback_client.post(
+            "/setup/api/local-handoff/issue",
+            headers={"X-MCP-Owner-Admin-Token": TEST_OWNER_ADMIN_TOKEN},
+            json={},
+        )
+        assert non_lb_issue.status_code == 403
+        assert non_lb_issue.json()["error"] == "NON_LOOPBACK_REJECTED"
+
+        # 3. Issue valid single-use handoff ticket via local owner_admin_token
+        issue_ok = c_client.post(
+            "/setup/api/local-handoff/issue",
+            headers={"X-MCP-Owner-Admin-Token": TEST_OWNER_ADMIN_TOKEN},
+            json={"ttl_seconds": 60},
+        )
+        assert issue_ok.status_code == 200, issue_ok.text
+        ticket = issue_ok.json()
+        code = ticket["handoff_code"]
+        assert code.startswith("hnd_")
+        assert TEST_OWNER_ADMIN_TOKEN not in issue_ok.text
+        assert TEST_CONSOLE_SECRET not in issue_ok.text
+
+        # 4. Non-loopback, cross-origin, and untrusted Host exchange attempts are rejected (without consuming valid ticket)
+        nl_ex = non_loopback_client.post("/setup/api/local-handoff", json={"handoff_code": code})
+        assert nl_ex.status_code == 403
+        assert nl_ex.json()["error"] == "NON_LOOPBACK_REJECTED"
+
+        evil_org_ex = c_client.post(
+            "/setup/api/local-handoff",
+            headers={"Origin": "https://evil.example.com"},
+            json={"handoff_code": code},
+        )
+        assert evil_org_ex.status_code == 403
+
+        evil_host_ex = c_client.post(
+            "/setup/api/local-handoff",
+            headers={"Host": "evil.example.com"},
+            json={"handoff_code": code},
+        )
+        assert evil_host_ex.status_code == 403
+
+        # 5. Valid loopback exchange authenticates seamlessly (zero manual password), sets HttpOnly SameSite=Strict cookie + CSRF
+        ex_ok = c_client.post("/setup/api/local-handoff", json={"handoff_code": code})
+        assert ex_ok.status_code == 200, ex_ok.text
+        ex_body = ex_ok.json()
+        assert ex_body["authenticated"] is True
+        assert ex_body["auth_mode"] == "local_windows_user_handoff"
+        csrf = ex_body["csrf_token"]
+        assert csrf
+        set_cookie_hdr = ex_ok.headers.get("set-cookie", "").lower()
+        assert "httponly" in set_cookie_hdr
+        assert "samesite=strict" in set_cookie_hdr
+        assert TEST_OWNER_ADMIN_TOKEN not in ex_ok.text
+        assert TEST_CONSOLE_SECRET not in ex_ok.text
+
+        # Authenticated GET /setup/api/state works immediately and supplies csrf_token for reload continuity
+        st_resp = c_client.get("/setup/api/state")
+        assert st_resp.status_code == 200
+        assert st_resp.json()["csrf_token"] == csrf
+
+        # Authenticated POST with X-CSRF-Token works without ever signing in with password
+        ver_resp = c_client.post("/setup/api/actions/verify-connection", headers={"X-CSRF-Token": csrf}, json={})
+        assert ver_resp.status_code == 200
+
+        # 6. Single-use anti-replay: reusing the exact same code fails with 409 HANDOFF_ALREADY_USED
+        replay = c_client.post("/setup/api/local-handoff", json={"handoff_code": code})
+        assert replay.status_code == 409
+        assert replay.json()["error"] == "HANDOFF_ALREADY_USED"
+
+        # 7. Windows user mismatch is rejected with 403 WINDOWS_USER_MISMATCH
+        other_user_ticket = c_client.post(
+            "/setup/api/local-handoff/issue",
+            headers={"X-MCP-Owner-Admin-Token": TEST_OWNER_ADMIN_TOKEN},
+            json={"windows_user": "otherdomain\\otheruser", "ttl_seconds": 30},
+        ).json()
+        mismatch = c_client.post("/setup/api/local-handoff", json={"handoff_code": other_user_ticket["handoff_code"]})
+        assert mismatch.status_code == 403
+        assert mismatch.json()["error"] == "WINDOWS_USER_MISMATCH"
+
+        # 8. Short-TTL expired ticket is rejected with 401 HANDOFF_EXPIRED
+        exp_ticket = c_client.post(
+            "/setup/api/local-handoff/issue",
+            headers={"X-MCP-Owner-Admin-Token": TEST_OWNER_ADMIN_TOKEN},
+            json={"ttl_seconds": 1.0},
+        ).json()
+        time.sleep(1.15)
+        exp_resp = c_client.post("/setup/api/local-handoff", json={"handoff_code": exp_ticket["handoff_code"]})
+        assert exp_resp.status_code == 401
+        assert exp_resp.json()["error"] == "HANDOFF_EXPIRED"
+    finally:
+        shutil.rmtree(env["td"], ignore_errors=True)
+
+
+def test_single_button_owner_confirmation_activates_profile_and_syncs_revoke_and_estop():
+    """Track UX-2: Single-button Confirm Owner Access activates profile from read_only, aligns workspace, and syncs Revoke/E-Stop."""
+    env = _build_dual_surface_env(profile="read_only")
+    try:
+        a_client = env["adapter_client"]
+        c_client = env["console_client"]
+        gw = env["gw"]
+        ws = env["ws"]
+        ws2 = Path(env["td"]) / "auto_aligned_ws"
+        ws2.mkdir(parents=True, exist_ok=True)
+        pers = c_client.app.state.setup_center_persistence
+        sk = c_client.app.state.setup_center_signing_key
+
+        assert gw.policy.profile == "read_only"
+
+        # Authenticate via zero-manual-key local handoff
+        ticket = c_client.post(
+            "/setup/api/local-handoff/issue",
+            headers={"X-MCP-Owner-Admin-Token": TEST_OWNER_ADMIN_TOKEN},
+            json={},
+        ).json()
+        csrf = c_client.post("/setup/api/local-handoff", json={"handoff_code": ticket["handoff_code"]}).json()["csrf_token"]
+        csrf_hdr = {"X-CSRF-Token": csrf}
+
+        # Connect OAuth 2.1 client and complete verified read tool call
+        cid, tok = _register_oauth_client_and_token(a_client, "ChatGPT Single-Button Client")
+        mcp_hdr = _mcp_init_and_headers(a_client, tok)
+        r_read = a_client.post(
+            "/mcp",
+            headers=mcp_hdr,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "agent_read_file", "arguments": {"workspace_root": str(ws), "path": "hello.txt"}},
+            },
+        )
+        assert r_read.status_code == 200 and r_read.json()["result"]["isError"] is False
+
+        # Request pairing including new non-sensitive workspace ws2
+        ch = a_client.post(
+            "/oauth/pairing/request",
+            headers={"Authorization": f"Bearer {tok}"},
+            json={
+                "requested_permission_level": "SCOPED",
+                "requested_workspaces": [str(ws), str(ws2)],
+                "requested_ttl_seconds": 3600,
+                "allow_destructive": False,
+            },
+        ).json()
+
+        # Single-button confirmation: activate_profile=True elevates read_only -> owner_full_control & persists HMAC state
+        confirm_res = c_client.post(
+            f"/setup/api/pairing/challenges/{ch['challenge_id']}/approve",
+            headers=csrf_hdr,
+            json={
+                "approved_permission_level": "SCOPED",
+                "approved_workspaces": [str(ws), str(ws2)],
+                "activate_profile": True,
+            },
+        )
+        assert confirm_res.status_code == 200, confirm_res.text
+        c_data = confirm_res.json()
+        assert c_data["activated_profile"] == "owner_full_control"
+        assert gw.policy.profile == "owner_full_control"
+        assert ws2.resolve() in gw.policy.write_roots
+        assert c_data["state_snapshot"]["state"] == "OWNER_CONTROL_READY"
+        assert c_data["state_snapshot"]["status_table"]["owner_identity"] == "Verified"
+        assert c_data["state_snapshot"]["status_table"]["permissions"] == "Scoped"
+
+        # HMAC-verified owner_runtime_state persisted cleanly in SQLite
+        persisted = pers.get_owner_approved_profile(secret=sk, owner_id="local_owner")
+        assert persisted["valid"] is True
+        assert persisted["effective_profile"] == "owner_full_control"
+
+        # Clicking Revoke Access immediately clears persisted profile state and reverts gateway to read_only
+        rev_res = c_client.post(
+            "/setup/api/actions/revoke-access",
+            headers=csrf_hdr,
+            json={"revoke_all": True},
+        )
+        assert rev_res.status_code == 200, rev_res.text
+        assert gw.policy.profile == "read_only"
+        assert rev_res.json()["state_snapshot"]["status_table"]["permissions"] == "Read"
+        assert rev_res.json()["state_snapshot"]["status_table"]["owner_identity"] == "Pending"
+        persisted_after_rev = pers.get_owner_approved_profile(secret=sk, owner_id="local_owner")
+        assert persisted_after_rev["effective_profile"] == "read_only"
+    finally:
+        shutil.rmtree(env["td"], ignore_errors=True)
+
+
+def test_auto_config_tunnel_auth_mode_and_open_setup_center_launcher_contract():
+    """Track UX-2: Verify tunnel auth_mode validation, auto_reconfigure detection, and Open-SetupCenter.cmd CRLF contract."""
+    env = _build_dual_surface_env(profile="read_only")
+    try:
+        c_client = env["console_client"]
+        csrf = _login_setup_center(c_client)
+        csrf_hdr = {"X-CSRF-Token": csrf}
+
+        # Invalid auth_mode rejected with 400
+        bad_mode = c_client.post(
+            "/setup/api/actions/connect-chatgpt",
+            headers=csrf_hdr,
+            json={
+                "tunnel_id": "tunnel_1234567890abcdef1234567890abcdef",
+                "runtime_api_key": "rk_valid_length_runtime_key_test_1234567890",
+                "auth_mode": "anonymous_owner",
+            },
+        )
+        assert bad_mode.status_code == 400
+        assert bad_mode.json()["error"] == "invalid_auth_mode"
+
+        # First connect with oauth -> auto_reconfigure is False
+        first_conn = c_client.post(
+            "/setup/api/actions/connect-chatgpt",
+            headers=csrf_hdr,
+            json={
+                "tunnel_id": "tunnel_1234567890abcdef1234567890abcdef",
+                "runtime_api_key": "rk_valid_length_runtime_key_test_1234567890",
+                "auth_mode": "oauth",
+            },
+        )
+        assert first_conn.status_code == 200
+        assert first_conn.json()["summary"]["auth_mode"] == "oauth"
+        assert first_conn.json()["summary"]["auto_reconfigure"] is False
+
+        # Second connect detects existing tunnel -> auto_reconfigure is True
+        second_conn = c_client.post(
+            "/setup/api/actions/connect-chatgpt",
+            headers=csrf_hdr,
+            json={
+                "tunnel_id": "tunnel_abcdef1234567890abcdef1234567890",
+                "runtime_api_key": "rk_valid_length_runtime_key_test_9876543210",
+                "auth_mode": "auth_none",
+            },
+        )
+        assert second_conn.status_code == 200
+        assert second_conn.json()["summary"]["auth_mode"] == "auth_none"
+        assert second_conn.json()["summary"]["auto_reconfigure"] is True
+
+        # Verify Open-SetupCenter.cmd exists, has strict CRLF line endings, and is packaged in Build-ReleasePackage.ps1
+        cmd_path = PROJECT_ROOT / "Open-SetupCenter.cmd"
+        assert cmd_path.is_file()
+        raw = cmd_path.read_bytes()
+        assert b"\r\n" in raw
+        assert raw.count(b"\r\n") == raw.count(b"\n")
+        assert "--open-setup" in raw.decode("utf-8")
+        builder = (PROJECT_ROOT / "scripts" / "Build-ReleasePackage.ps1").read_text(encoding="utf-8")
+        assert '"Open-SetupCenter.cmd"' in builder
+    finally:
+        shutil.rmtree(env["td"], ignore_errors=True)
+
+
+def test_run_winowner_live_setup_center_tunnel_hooks_and_ttl_validation():
+    """Verify live Run-WinOwnerMcp.py tunnel hooks execute Connect-ChatGPT.ps1 without leaking secrets and fail closed."""
+    import importlib.util
+    import types
+
+    runner_path = PROJECT_ROOT / "scripts" / "Run-WinOwnerMcp.py"
+    spec = importlib.util.spec_from_file_location("run_winowner_mcp_mod", runner_path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    td = Path(tempfile.mkdtemp(prefix="test_live_tunnel_hooks_"))
+    try:
+        (td / "scripts").mkdir(parents=True, exist_ok=True)
+        (td / "scripts" / "Connect-ChatGPT.ps1").write_text("# stub\n", encoding="utf-8")
+        secret_key = "rk_live_hook_super_secret_runtime_key_1234567890"
+        tid = "tunnel_1234567890abcdef1234567890abcdef"
+        captured: list[dict[str, Any]] = []
+
+        def _fake_ok_runner(argv, **kwargs):
+            captured.append({"argv": list(argv), "env": dict(kwargs.get("env") or {})})
+            return types.SimpleNamespace(
+                returncode=0,
+                stdout="TUNNEL_SETUP_PASS: runtime ready; ChatGPT tool call NOT verified.\n",
+                stderr="",
+            )
+
+        # 1. Initial connect (no yaml, no existing task) -> passes -Port, -TunnelId, -AuthMode, -NoBrowser, NO -Reconfigure
+        hooks = mod.build_setup_center_action_hooks(
+            td,
+            19768,
+            subprocess_runner=_fake_ok_runner,
+            task_exists_fn=lambda _p: False,
+        )
+        res1 = hooks["connect_chatgpt"]({"tunnel_id": tid, "runtime_api_key": secret_key, "auth_mode": "oauth", "reconfigure": False})
+        assert res1["status"] == "TUNNEL_SETUP_PASS"
+        assert res1["readyz_ok"] is True
+        assert res1["auto_reconfigure"] is False
+        assert len(captured) == 1
+        argv1 = " ".join(captured[0]["argv"])
+        assert "-Port 19768" in argv1
+        assert f"-TunnelId '{tid}'" in argv1
+        assert "-AuthMode 'oauth'" in argv1
+        assert "-NoBrowser" in argv1
+        assert "-Reconfigure" not in argv1
+        assert secret_key not in argv1
+        assert captured[0]["env"].get("WINOWNER_SETUP_RUNTIME_API_KEY") == secret_key
+        assert "Remove-Item Env:WINOWNER_SETUP_RUNTIME_API_KEY" in argv1
+
+        # 2. Auto-detects existing winowner.yaml -> automatically appends -Reconfigure
+        (td / "runtime" / "tunnel").mkdir(parents=True, exist_ok=True)
+        (td / "runtime" / "tunnel" / "winowner.yaml").write_text("config_version: 1\n", encoding="utf-8")
+        res2 = hooks["connect_chatgpt"]({"tunnel_id": tid, "runtime_api_key": secret_key, "auth_mode": "auth_none", "reconfigure": False})
+        assert res2["auto_reconfigure"] is True
+        argv2 = " ".join(captured[1]["argv"])
+        assert "-AuthMode 'auth_none'" in argv2
+        assert "-Reconfigure" in argv2
+        assert secret_key not in argv2
+
+        # 3. Non-zero exit from Connect-ChatGPT.ps1 raises RuntimeError with secret scrubbed -> HTTP 400 in Setup Center (never fake PASS)
+        def _fake_fail_runner(argv, **kwargs):
+            return types.SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr=f"Tunnel doctor failed for key {secret_key} on port 19768",
+            )
+
+        fail_hooks = mod.build_setup_center_action_hooks(
+            td,
+            19768,
+            subprocess_runner=_fake_fail_runner,
+            task_exists_fn=lambda _p: True,
+        )
+        with pytest.raises(RuntimeError) as exc_info:
+            fail_hooks["reconfigure_tunnel"]({"tunnel_id": tid, "runtime_api_key": secret_key, "auth_mode": "oauth", "reconfigure": True})
+        assert secret_key not in str(exc_info.value)
+        assert "Connect-ChatGPT.ps1 failed" in str(exc_info.value)
+
+        # Verify Setup Center returns HTTP 400 (never fake TUNNEL_SETUP_PASS) when live hook fails, and rejects non-numeric ttl_seconds
+        env = _build_dual_surface_env(profile="read_only")
+        try:
+            c_app = create_web_console_app(
+                gateway=env["gw"],
+                owner_password=TEST_CONSOLE_SECRET,
+                oauth_persistence=env["adapter_client"].app.state.oauth_persistence,
+                oauth_signing_key=TEST_OAUTH_SIGNING_KEY,
+                owner_admin_token=TEST_OWNER_ADMIN_TOKEN,
+                db_path=env["paths"].oauth_db_path,
+                setup_action_hooks=fail_hooks,
+            )
+            c_client = TestClient(c_app)
+            csrf = _login_setup_center(c_client)
+            fail_resp = c_client.post(
+                "/setup/api/actions/connect-chatgpt",
+                headers={"X-CSRF-Token": csrf},
+                json={"tunnel_id": tid, "runtime_api_key": secret_key, "auth_mode": "oauth"},
+            )
+            assert fail_resp.status_code == 400
+            assert fail_resp.json()["error"] == "tunnel_setup_failed"
+            assert secret_key not in fail_resp.text
+            assert "TUNNEL_SETUP_PASS" not in fail_resp.text
+
+            bad_ttl = c_client.post(
+                "/setup/api/local-handoff/issue",
+                headers={"X-MCP-Owner-Admin-Token": TEST_OWNER_ADMIN_TOKEN},
+                json={"ttl_seconds": "not-a-number"},
+            )
+            assert bad_ttl.status_code == 400
+            assert bad_ttl.json()["error"] == "INVALID_TTL_SECONDS"
+        finally:
+            shutil.rmtree(env["td"], ignore_errors=True)
+
+        # 4. PowerShell-style flags (-Port / -ConsolePort) normalize cleanly for Open-SetupCenter.cmd
+        assert mod._normalize_cli_argv(["--open-setup", "-Port", "19768", "-ConsolePort", "19767"]) == [
+            "--open-setup", "--port", "19768", "--console-port", "19767"
+        ]
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+

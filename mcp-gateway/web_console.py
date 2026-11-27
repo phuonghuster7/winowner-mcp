@@ -3209,10 +3209,48 @@ def create_web_console_app(
 
     from setup_center import register_setup_center_routes  # noqa: E402
 
+    def _create_handoff_web_session(client_ip: str = "127.0.0.1") -> tuple[WebConsoleAuthSession, bool]:
+        now = time.time()
+        with lock:
+            active_s = {sid: s for sid, s in web_sessions.items() if s.is_valid(now=now)}
+            if len(active_s) >= max_concurrent_sessions:
+                oldest_sid = min(active_s.keys(), key=lambda k: active_s[k].created_at)
+                active_s[oldest_sid].revoked = True
+                active_s.pop(oldest_sid, None)
+            web_sessions.clear()
+            web_sessions.update(active_s)
+
+            web_session_id = f"wsess_{uuid.uuid4().hex}"
+            cookie_token = _sign_session_id(web_session_id)
+            csrf_token = secrets.token_urlsafe(32)
+            ws = WebConsoleAuthSession(
+                web_session_id=web_session_id,
+                cookie_token=cookie_token,
+                csrf_token=csrf_token,
+                created_at=now,
+                expires_at=now + session_cookie_ttl_seconds,
+                client_ip=client_ip,
+            )
+            web_sessions[web_session_id] = ws
+        return ws, trust_proxy
+
+    def _verify_host_and_origin_guard(request: Request) -> JSONResponse | None:
+        ok_host, host_reason = _verify_request_host(request, hosts_allowlist)
+        if not ok_host:
+            return JSONResponse(status_code=403, content={"ok": False, "error": host_reason})
+        ok_origin, origin_reason = _verify_loopback_origin(request, hosts_allowlist, origins_allowlist)
+        if not ok_origin:
+            return JSONResponse(status_code=403, content={"ok": False, "error": origin_reason})
+        return None
+
     register_setup_center_routes(
         app,
         gw=gw,
         authenticate_request=_authenticate_request,
+        create_handoff_web_session=_create_handoff_web_session,
+        verify_host_and_origin=_verify_host_and_origin_guard,
+        session_cookie_name=SESSION_COOKIE_NAME,
+        session_cookie_ttl_seconds=session_cookie_ttl_seconds,
         oauth_persistence=oauth_persistence,
         oauth_signing_key=oauth_signing_key,
         owner_admin_token=owner_admin_token,

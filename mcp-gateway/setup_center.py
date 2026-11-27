@@ -26,9 +26,13 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import getpass
+import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -65,6 +69,18 @@ FOUR_STEP_SEQUENCE = (
     "OWNER_VERIFIED",
     "OWNER_CONTROL_READY",
 )
+
+
+def get_current_windows_user_identity() -> str:
+    """Return canonical lowercased Windows user identity for local handoff binding."""
+    domain = (os.getenv("USERDOMAIN") or "").strip().lower()
+    user = (os.getenv("USERNAME") or "").strip().lower()
+    if not user:
+        try:
+            user = getpass.getuser().strip().lower()
+        except Exception:
+            user = "local_owner"
+    return f"{domain}\\{user}" if domain else user
 
 
 def _parse_semver_tuple(tag: str) -> tuple[int, int, int, int, str] | None:
@@ -680,11 +696,11 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <div id="login-overlay">
+  <div id="login-overlay" class="hidden">
     <div class="login-box">
       <h2 id="login-title">WinOwner Setup Center — Local Owner Sign-In</h2>
       <p id="login-desc" style="font-size:12px; color:var(--muted);">
-        Loopback-protected Windows Owner Control Surface (127.0.0.1). Enter your local owner secret or use the local desktop launcher.
+        Fallback sign-in (direct browser visit or expired launcher ticket). Use <strong>Open-SetupCenter.cmd</strong> to sign in automatically with zero manual key entry.
       </p>
       <label for="owner-password" id="login-label">Owner Console Secret / Admin Key</label>
       <input type="password" id="owner-password" placeholder="Enter local owner secret" autocomplete="current-password" />
@@ -701,6 +717,7 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
     <div style="display:flex; gap:8px; align-items:center;">
       <button onclick="toggleLanguage()" id="lang-toggle-btn" style="text-align:center;">VI / EN</button>
       <button onclick="refreshSetupState()" id="refresh-btn" style="text-align:center;">Refresh</button>
+      <button class="danger" onclick="runEmergencyStopToggle()" id="estop-btn" style="text-align:center;">Emergency Stop</button>
       <a href="/console" style="color:var(--accent); text-decoration:none; font-size:13px; padding:6px 10px;" id="adv-console-link">Advanced Mode B Console</a>
       <button onclick="logoutSetupCenter()" id="logout-btn" style="text-align:center;">Logout</button>
     </div>
@@ -782,7 +799,7 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
       <p id="panel-connect-note" style="font-size:13px; color:var(--muted);">
         Enter your OpenAI Tunnel ID (tunnel_...) and Runtime API Key. The key is stored locally with Windows owner-only ACLs and is never echoed or logged. Note: Authentication: None in ChatGPT is strictly Read-Only; Owner permissions require OAuth 2.1 verifiable client pairing.
       </p>
-      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px;">
         <div>
           <label for="input-tunnel-id">OpenAI Tunnel ID</label>
           <input type="text" id="input-tunnel-id" placeholder="tunnel_..." />
@@ -790,6 +807,13 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
         <div>
           <label for="input-runtime-key">Runtime API Key (Hidden — Never Displayed)</label>
           <input type="password" id="input-runtime-key" placeholder="Enter Runtime API Key (Tunnels Read + Use)" autocomplete="off" />
+        </div>
+        <div>
+          <label for="input-auth-mode">Connection Mode</label>
+          <select id="input-auth-mode">
+            <option value="oauth" selected>OAuth 2.1 (Recommended — Supports Owner Pairing)</option>
+            <option value="auth_none">Authentication: None (Strictly Read-Only)</option>
+          </select>
         </div>
       </div>
       <div style="display:flex; gap:10px;">
@@ -800,7 +824,7 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
 
     <div class="card col-12 hidden" id="panel-reconfig">
       <h2 id="panel-reconfig-title">Safe Tunnel Reconfiguration (Backup -> Validate -> Cutover -> Auto-Rollback)</h2>
-      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px;">
         <div>
           <label for="reconfig-tunnel-id">New OpenAI Tunnel ID</label>
           <input type="text" id="reconfig-tunnel-id" placeholder="tunnel_..." />
@@ -808,6 +832,13 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
         <div>
           <label for="reconfig-runtime-key">New Runtime API Key (Hidden)</label>
           <input type="password" id="reconfig-runtime-key" placeholder="Enter Runtime API Key" autocomplete="off" />
+        </div>
+        <div>
+          <label for="reconfig-auth-mode">Connection Mode</label>
+          <select id="reconfig-auth-mode">
+            <option value="oauth" selected>OAuth 2.1 (Recommended — Supports Owner Pairing)</option>
+            <option value="auth_none">Authentication: None (Strictly Read-Only)</option>
+          </select>
         </div>
       </div>
       <div style="display:flex; gap:10px;">
@@ -856,9 +887,11 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
         btnUpdates: '7. Check for Updates',
         btnUninstall: '8. Uninstall',
         secPairing: 'Review Owner Access — Pending Verifiable Pairing Requests',
-        noPending: 'No pending owner pairing requests. When an OAuth 2.1 ChatGPT client requests owner access, it will appear here with its verification code for your approval.',
-        approveBtn: 'Approve Owner Pairing',
-        denyBtn: 'Deny Request'
+        noPending: 'No pending owner pairing requests. When an OAuth 2.1 ChatGPT client requests owner access, it will appear here with its verification code for your one-click approval.',
+        confirmOwnerBtn: 'Confirm Owner Access',
+        denyBtn: 'Deny Request',
+        estopBtn: 'Emergency Stop',
+        estopResetBtn: 'Reset Emergency Stop'
       },
       vi: {
         hdrTitle: 'Trung tâm Thiết lập WinOwner',
@@ -883,9 +916,11 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
         btnUpdates: '7. Kiểm tra cập nhật (Check for Updates)',
         btnUninstall: '8. Gỡ cài đặt (Uninstall)',
         secPairing: 'Duyệt quyền Chủ máy — Yêu cầu ghép nối có xác minh đang chờ',
-        noPending: 'Không có yêu cầu ghép nối chủ máy nào đang chờ. Khi client ChatGPT OAuth 2.1 yêu cầu quyền chủ máy, thông tin và mã xác nhận sẽ hiển thị tại đây để bạn phê duyệt.',
-        approveBtn: 'Phê duyệt (Approve)',
-        denyBtn: 'Từ chối (Deny)'
+        noPending: 'Không có yêu cầu ghép nối chủ máy nào đang chờ. Khi client ChatGPT OAuth 2.1 yêu cầu quyền chủ máy, thông tin và mã xác nhận sẽ hiển thị tại đây để bạn xác nhận một lần.',
+        confirmOwnerBtn: 'Xác nhận cấp quyền chủ máy',
+        denyBtn: 'Từ chối (Deny)',
+        estopBtn: 'Dừng khẩn cấp (E-Stop)',
+        estopResetBtn: 'Tắt Dừng khẩn cấp'
       }
     };
 
@@ -918,6 +953,7 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
       setText('btn-check-updates', t.btnUpdates);
       setText('btn-uninstall', t.btnUninstall);
       setText('sec-pairing-title', t.secPairing);
+      setText('estop-btn', (latestState && latestState.emergency_stop) ? t.estopResetBtn : t.estopBtn);
       if (latestState) renderState(latestState);
     }
 
@@ -979,6 +1015,12 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
     function renderState(st) {
       latestState = st;
       setText('hdr-state-pill', st.state);
+      const estopBtn = document.getElementById('estop-btn');
+      if (estopBtn) {
+        const t = I18N[currentLang];
+        estopBtn.textContent = st.emergency_stop ? t.estopResetBtn : t.estopBtn;
+        estopBtn.className = st.emergency_stop ? 'warn' : 'danger';
+      }
       const tbl = st.status_table || {};
 
       setPill('val-local-service', tbl.local_service || 'Error', tbl.local_service === 'Ready' ? 'green' : 'red');
@@ -1034,16 +1076,18 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
 
           const title = document.createElement('div');
           title.style.fontWeight = '700';
-          title.textContent = 'Verification Code: ' + ch.verification_code + ' | Client: ' + ch.client_id + (ch.client_name ? (' (' + ch.client_name + ')') : '');
+          const maskedCid = ch.client_id && ch.client_id.length > 15 ? (ch.client_id.slice(0, 12) + '...') : (ch.client_id || '');
+          title.textContent = 'Code: ' + ch.verification_code + ' | Client: ' + (ch.client_name || 'OAuth 2.1 Client') + ' (' + maskedCid + ') | Auth: OAuth 2.1';
           card.appendChild(title);
 
           const meta = document.createElement('div');
           meta.style.fontSize = '12px';
           meta.style.color = 'var(--muted)';
           meta.style.margin = '6px 0';
-          meta.textContent = 'Requested Level: ' + ch.requested_permission_level +
-            ' | Tiers: ' + (ch.requested_tiers || []).join(',') +
-            ' | Workspaces: ' + (ch.requested_workspaces || []).join(', ') +
+          meta.textContent = 'Scope: ' + ch.requested_permission_level +
+            ' | Tiers: ' + (ch.requested_tiers || []).join(', ') +
+            ' | Workspaces: ' + ((ch.requested_workspaces || []).join(', ') || 'Default approved workspace') +
+            ' | Destructive: ' + (ch.allow_destructive ? 'Allowed' : 'Blocked') +
             ' | TTL: ' + ch.requested_ttl_seconds + 's' +
             ' | Expires in: ' + ch.remaining_seconds + 's';
           card.appendChild(meta);
@@ -1052,23 +1096,17 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
           btnRow.style.display = 'flex';
           btnRow.style.gap = '8px';
 
-          const btnApp = document.createElement('button');
-          btnApp.className = 'success';
-          btnApp.textContent = I18N[currentLang].approveBtn + ' (' + ch.requested_permission_level + ')';
-          btnApp.onclick = () => approveChallenge(ch.challenge_id, ch.requested_permission_level, ch.requested_workspaces);
-
-          const btnScoped = document.createElement('button');
-          btnScoped.className = 'primary';
-          btnScoped.textContent = currentLang === 'vi' ? 'Phê duyệt giới hạn (Scoped)' : 'Approve as Scoped';
-          btnScoped.onclick = () => approveChallenge(ch.challenge_id, 'SCOPED', ch.requested_workspaces);
+          const btnConfirm = document.createElement('button');
+          btnConfirm.className = 'success';
+          btnConfirm.textContent = I18N[currentLang].confirmOwnerBtn;
+          btnConfirm.onclick = () => confirmOwnerAccess(ch.challenge_id, ch.requested_permission_level, ch.requested_workspaces);
 
           const btnDeny = document.createElement('button');
           btnDeny.className = 'danger';
           btnDeny.textContent = I18N[currentLang].denyBtn;
           btnDeny.onclick = () => denyChallenge(ch.challenge_id);
 
-          btnRow.appendChild(btnApp);
-          btnRow.appendChild(btnScoped);
+          btnRow.appendChild(btnConfirm);
           btnRow.appendChild(btnDeny);
           card.appendChild(btnRow);
           chContainer.appendChild(card);
@@ -1110,11 +1148,13 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
     async function submitConnectChatGPT(isReconfigure) {
       const tid = document.getElementById(isReconfigure ? 'reconfig-tunnel-id' : 'input-tunnel-id').value.trim();
       const keyEl = document.getElementById(isReconfigure ? 'reconfig-runtime-key' : 'input-runtime-key');
+      const authModeEl = document.getElementById(isReconfigure ? 'reconfig-auth-mode' : 'input-auth-mode');
+      const authMode = authModeEl ? authModeEl.value : 'oauth';
       const apiKey = keyEl.value;
       keyEl.value = '';
       const ep = isReconfigure ? '/setup/api/actions/reconfigure-tunnel' : '/setup/api/actions/connect-chatgpt';
       try {
-        const res = await apiCall(ep, 'POST', { tunnel_id: tid, runtime_api_key: apiKey });
+        const res = await apiCall(ep, 'POST', { tunnel_id: tid, runtime_api_key: apiKey, auth_mode: authMode });
         hidePanels();
         if (res.state_snapshot) renderState(res.state_snapshot);
         showActionOutput(res.summary || res);
@@ -1133,14 +1173,36 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
       }
     }
 
-    async function approveChallenge(challengeId, level, workspaces) {
+    async function confirmOwnerAccess(challengeId, level, workspaces) {
       try {
         const res = await apiCall('/setup/api/pairing/challenges/' + encodeURIComponent(challengeId) + '/approve', 'POST', {
           approved_permission_level: level,
-          approved_workspaces: workspaces
+          approved_workspaces: workspaces,
+          activate_profile: true
         });
         if (res.state_snapshot) renderState(res.state_snapshot);
-        showActionOutput({ approved: true, challenge_id: challengeId, delegation_id: res.delegation_id, level: res.approved_permission_level });
+        showActionOutput({
+          confirmed: true,
+          challenge_id: challengeId,
+          delegation_id: res.delegation_id,
+          level: res.approved_permission_level,
+          activated_profile: res.activated_profile
+        });
+      } catch (e) {
+        showActionOutput({ error: e.message });
+      }
+    }
+
+    async function runEmergencyStopToggle() {
+      const isActive = Boolean(latestState && latestState.emergency_stop);
+      try {
+        const res = await apiCall('/setup/api/actions/revoke-access', 'POST', {
+          revoke_all: false,
+          engage_emergency_stop: !isActive,
+          reset_emergency_stop: isActive
+        });
+        if (res.state_snapshot) renderState(res.state_snapshot);
+        showActionOutput({ emergency_stop: !isActive, state: res.state_snapshot ? res.state_snapshot.state : null });
       } catch (e) {
         showActionOutput({ error: e.message });
       }
@@ -1190,13 +1252,41 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
 
     window.addEventListener('DOMContentLoaded', async () => {
       applyTranslations();
+      const hashStr = window.location.hash || '';
+      if (hashStr.startsWith('#handoff=')) {
+        const handoffCode = decodeURIComponent(hashStr.slice('#handoff='.length)).trim();
+        // Scrub fragment immediately so single-use code never remains in address bar or history
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        } else {
+          window.location.hash = '';
+        }
+        try {
+          const res = await apiCall('/setup/api/local-handoff', 'POST', { handoff_code: handoffCode });
+          if (res && res.authenticated) {
+            csrfToken = res.csrf_token;
+            document.getElementById('login-overlay').classList.add('hidden');
+            if (res.state_snapshot) {
+              renderState(res.state_snapshot);
+            } else {
+              await refreshSetupState();
+            }
+            return;
+          }
+        } catch (e) {
+          setText('login-error', e.message);
+        }
+      }
       try {
         const st = await apiCall('/setup/api/state', 'GET').catch(() => null);
         if (st && st.ok) {
+          if (st.csrf_token) csrfToken = st.csrf_token;
           document.getElementById('login-overlay').classList.add('hidden');
           renderState(st);
+          return;
         }
       } catch (_) {}
+      document.getElementById('login-overlay').classList.remove('hidden');
     });
   </script>
 </body>
@@ -1209,6 +1299,10 @@ def register_setup_center_routes(
     *,
     gw: Any,
     authenticate_request: Callable[..., tuple[Any, JSONResponse | None]],
+    create_handoff_web_session: Callable[[str], tuple[Any, bool]] | None = None,
+    verify_host_and_origin: Callable[[Request], JSONResponse | None] | None = None,
+    session_cookie_name: str = "mcp_console_session",
+    session_cookie_ttl_seconds: int = 14400,
     oauth_persistence: Any | None = None,
     oauth_signing_key: str | None = None,
     owner_admin_token: str | None = None,
@@ -1226,6 +1320,8 @@ def register_setup_center_routes(
     )
     hooks = dict(setup_action_hooks or {})
     state_lock = threading.Lock()
+    handoff_lock = threading.Lock()
+    handoff_tickets: dict[str, dict[str, Any]] = {}
     runtime_overrides: dict[str, Any] = {
         "local_service_ready": True,
         "tunnel_info": None,
@@ -1235,6 +1331,61 @@ def register_setup_center_routes(
     app.state.setup_center_persistence = pers
     app.state.setup_center_signing_key = sk
     app.state.setup_center_owner_admin_token = adm
+
+    def _issue_local_handoff_ticket(
+        *,
+        windows_user: str | None = None,
+        ttl_seconds: float = 60.0,
+    ) -> dict[str, Any]:
+        ttl = max(1.0, min(120.0, float(ttl_seconds)))
+        now = time.time()
+        bound_user = str(windows_user or get_current_windows_user_identity()).strip().lower()
+        code = f"hnd_{secrets.token_hex(32)}"
+        code_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        expires_at = now + ttl
+        with handoff_lock:
+            # Prune expired or used tickets and keep bounded
+            stale = [k for k, v in handoff_tickets.items() if v.get("used") or now >= float(v.get("expires_at", 0.0))]
+            for k in stale:
+                handoff_tickets.pop(k, None)
+            if len(handoff_tickets) >= 32:
+                oldest = min(handoff_tickets.keys(), key=lambda k: handoff_tickets[k]["created_at"])
+                handoff_tickets.pop(oldest, None)
+            handoff_tickets[code_hash] = {
+                "windows_user": bound_user,
+                "created_at": now,
+                "expires_at": expires_at,
+                "used": False,
+            }
+        return {
+            "ok": True,
+            "handoff_code": code,
+            "expires_at": expires_at,
+            "ttl_seconds": ttl,
+            "windows_user": bound_user,
+        }
+
+    app.state.issue_local_handoff_ticket = _issue_local_handoff_ticket
+
+    def _sync_external_adapter_owner_endpoint(path: str, payload: dict[str, Any]) -> None:
+        """Best-effort loopback sync to live adapter on adapter_port if running in a separate process."""
+        if not adapter_port or not adm:
+            return
+        try:
+            url = f"http://127.0.0.1:{int(adapter_port)}{path}"
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-MCP-Owner-Admin-Token": adm,
+                },
+            )
+            with urllib.request.urlopen(req, timeout=1.5) as _:
+                pass
+        except Exception:
+            pass
 
     def _current_snapshot() -> dict[str, Any]:
         with state_lock:
@@ -1253,6 +1404,169 @@ def register_setup_center_routes(
             version_state=v_info,
         )
 
+    @app.post("/setup/api/local-handoff/issue")
+    async def setup_issue_local_handoff(request: Request) -> Response:
+        client_host = (request.client.host if request.client else "").strip().lower()
+        if client_host and client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+            return JSONResponse(
+                status_code=403,
+                content={"ok": False, "error": "NON_LOOPBACK_REJECTED", "error_description": "Local handoff is restricted to loopback (127.0.0.1)."},
+            )
+        if verify_host_and_origin is not None:
+            guard_err = verify_host_and_origin(request)
+            if guard_err is not None:
+                return guard_err
+
+        caller_secret = str(getattr(gw, "_caller_auth_token", "") or "")
+        hdr_admin = (request.headers.get("x-mcp-owner-admin-token") or "").strip()
+        if hdr_admin and caller_secret and hmac.compare_digest(hdr_admin.encode("utf-8"), caller_secret.encode("utf-8")):
+            gw.policy.audit.log_event(
+                tool_name="setup_center_handoff_issue",
+                tier="SECURITY",
+                decision="DENY",
+                reason="Shared tunnel bearer cannot issue local Setup Center handoff tickets",
+            )
+            return JSONResponse(status_code=403, content={"ok": False, "error": "FORBIDDEN_TUNNEL_CREDENTIAL"})
+        if not hdr_admin or not adm or not hmac.compare_digest(hdr_admin.encode("utf-8"), adm.encode("utf-8")):
+            return JSONResponse(status_code=401, content={"ok": False, "error": "UNAUTHORIZED_HANDOFF_ISSUER"})
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        import math
+        try:
+            ttl_req = float(body.get("ttl_seconds", 60.0))
+        except (TypeError, ValueError):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "INVALID_TTL_SECONDS"})
+        if not math.isfinite(ttl_req) or ttl_req <= 0:
+            return JSONResponse(status_code=400, content={"ok": False, "error": "INVALID_TTL_SECONDS"})
+        req_user = body.get("windows_user")
+        ticket = _issue_local_handoff_ticket(windows_user=req_user, ttl_seconds=ttl_req)
+        gw.policy.audit.log_event(
+            tool_name="setup_center_handoff_issue",
+            tier="SECURITY",
+            decision="ALLOW",
+            reason="Issued single-use current-Windows-user local Setup Center handoff ticket",
+            result_summary={"windows_user": ticket["windows_user"], "ttl_seconds": ticket["ttl_seconds"]},
+        )
+        return JSONResponse(status_code=200, content=ticket)
+
+    @app.post("/setup/api/local-handoff")
+    async def setup_exchange_local_handoff(request: Request) -> Response:
+        client_host = (request.client.host if request.client else "").strip().lower()
+        if client_host and client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+            gw.policy.audit.log_event(
+                tool_name="setup_center_local_handoff",
+                tier="SECURITY",
+                decision="DENY",
+                reason=f"Rejected non-loopback local handoff exchange from {client_host}",
+            )
+            return JSONResponse(
+                status_code=403,
+                content={"ok": False, "error": "NON_LOOPBACK_REJECTED", "error_description": "Local handoff requires loopback (127.0.0.1)."},
+            )
+        if verify_host_and_origin is not None:
+            guard_err = verify_host_and_origin(request)
+            if guard_err is not None:
+                return guard_err
+        if create_handoff_web_session is None:
+            return JSONResponse(status_code=503, content={"ok": False, "error": "HANDOFF_UNAVAILABLE"})
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "INVALID_REQUEST"})
+
+        raw_code = str(body.get("handoff_code") or "").strip()
+        if not raw_code or not raw_code.startswith("hnd_"):
+            return JSONResponse(status_code=401, content={"ok": False, "error": "INVALID_HANDOFF_CODE"})
+
+        code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+        now = time.time()
+        server_win_user = get_current_windows_user_identity()
+        claimed_win_user = str(body.get("windows_user") or "").strip().lower()
+
+        with handoff_lock:
+            rec = handoff_tickets.get(code_hash)
+            if rec is None:
+                gw.policy.audit.log_event(
+                    tool_name="setup_center_local_handoff",
+                    tier="SECURITY",
+                    decision="DENY",
+                    reason="Unknown or missing local handoff code",
+                )
+                return JSONResponse(status_code=401, content={"ok": False, "error": "INVALID_HANDOFF_CODE"})
+            if rec.get("used"):
+                gw.policy.audit.log_event(
+                    tool_name="setup_center_local_handoff",
+                    tier="SECURITY",
+                    decision="DENY",
+                    reason="Rejected replay of already-used local handoff code",
+                )
+                return JSONResponse(status_code=409, content={"ok": False, "error": "HANDOFF_ALREADY_USED"})
+            if now >= float(rec.get("expires_at", 0.0)):
+                rec["used"] = True
+                gw.policy.audit.log_event(
+                    tool_name="setup_center_local_handoff",
+                    tier="SECURITY",
+                    decision="DENY",
+                    reason="Rejected expired local handoff code",
+                )
+                return JSONResponse(status_code=401, content={"ok": False, "error": "HANDOFF_EXPIRED"})
+            bound_user = str(rec.get("windows_user") or "").strip().lower()
+            if bound_user != server_win_user or (claimed_win_user and claimed_win_user != bound_user):
+                rec["used"] = True
+                gw.policy.audit.log_event(
+                    tool_name="setup_center_local_handoff",
+                    tier="SECURITY",
+                    decision="DENY",
+                    reason=f"Rejected local handoff Windows user mismatch (bound={bound_user})",
+                )
+                return JSONResponse(
+                    status_code=403,
+                    content={"ok": False, "error": "WINDOWS_USER_MISMATCH", "error_description": "Handoff ticket does not belong to the active Windows owner account."},
+                )
+            rec["used"] = True
+
+        ws, trust_proxy = create_handoff_web_session(client_host or "127.0.0.1")
+        is_https = (request.url.scheme == "https") or (
+            trust_proxy and request.headers.get("x-forwarded-proto", "").lower() == "https"
+        )
+        gw.policy.audit.log_event(
+            tool_name="setup_center_local_handoff",
+            tier="SECURITY",
+            decision="ALLOW",
+            reason="Authenticated local Windows owner via single-use launcher handoff",
+            result_summary={"web_session_id": ws.web_session_id, "windows_user": server_win_user},
+        )
+        resp = JSONResponse(
+            status_code=200,
+            content={
+                "ok": True,
+                "authenticated": True,
+                "auth_mode": "local_windows_user_handoff",
+                "web_session_id": ws.web_session_id,
+                "csrf_token": ws.csrf_token,
+                "expires_at": ws.expires_at,
+                "state_snapshot": _current_snapshot(),
+            },
+        )
+        resp.set_cookie(
+            key=session_cookie_name,
+            value=ws.cookie_token,
+            httponly=True,
+            secure=is_https,
+            samesite="strict",
+            max_age=session_cookie_ttl_seconds,
+            path="/",
+        )
+        return resp
+
     @app.get("/setup", response_class=HTMLResponse)
     @app.get("/console/setup", response_class=HTMLResponse)
     async def setup_center_ui() -> Response:
@@ -1269,10 +1583,13 @@ def register_setup_center_routes(
 
     @app.get("/setup/api/state")
     async def setup_get_state(request: Request) -> Response:
-        _, err_resp = authenticate_request(request, require_csrf=False)
+        sess, err_resp = authenticate_request(request, require_csrf=False)
         if err_resp is not None:
             return err_resp
-        return JSONResponse(status_code=200, content=_current_snapshot())
+        snap = _current_snapshot()
+        if sess is not None and getattr(sess, "csrf_token", None):
+            snap["csrf_token"] = sess.csrf_token
+        return JSONResponse(status_code=200, content=snap)
 
     @app.get("/setup/api/pairing/challenges")
     async def setup_list_challenges(request: Request) -> Response:
@@ -1368,6 +1685,45 @@ def register_setup_center_routes(
                 content={"ok": False, "error": "invalid_request", "error_description": str(exc)},
             )
 
+        activated_profile = None
+        if bool(body.get("activate_profile", False)):
+            req_target_prof = str(body.get("target_profile") or "").strip()
+            eff_target_prof = req_target_prof or (
+                "owner_full_control"
+                if str(res.get("approved_permission_level") or "").upper() in ("OWNER", "SCOPED")
+                else "read_only"
+            )
+            if hasattr(pers, "set_owner_approved_profile"):
+                pers.set_owner_approved_profile(
+                    secret=sk,
+                    profile=eff_target_prof,
+                    approved_by="local_owner",
+                    delegation_id=str(res.get("delegation_id") or ""),
+                    client_id=str(res.get("client_id") or ""),
+                )
+            if not (hasattr(gw, "is_emergency_stop_active") and gw.is_emergency_stop_active()):
+                if hasattr(gw, "switch_policy_profile"):
+                    gw.switch_policy_profile(eff_target_prof, reason="setup_center_single_button_confirm")
+                # Auto-align approved workspaces on policy roots (never adding sensitive paths)
+                approved_ws = body.get("approved_workspaces") or res.get("approved_workspaces") or []
+                if isinstance(approved_ws, list) and getattr(gw, "policy", None) is not None:
+                    for ws_item in approved_ws:
+                        try:
+                            ws_p = Path(str(ws_item)).resolve()
+                            if ws_p.is_dir() and not gw.policy.is_sensitive_path_str(ws_p, check_content=False):
+                                for attr in ("read_roots", "write_roots", "exec_roots"):
+                                    roots_list = list(getattr(gw.policy, attr, []) or [])
+                                    if ws_p not in roots_list:
+                                        setattr(gw.policy, attr, [*roots_list, ws_p])
+                        except Exception:
+                            continue
+                await asyncio.to_thread(
+                    _sync_external_adapter_owner_endpoint,
+                    "/oauth/owner/profile",
+                    {"profile": eff_target_prof, "reason": "setup_center_single_button_confirm"},
+                )
+            activated_profile = eff_target_prof
+
         gw.policy.audit.log_event(
             tool_name="setup_center_pairing_approve",
             tier="SECURITY",
@@ -1379,9 +1735,13 @@ def register_setup_center_routes(
                 "delegation_id": res.get("delegation_id"),
                 "capability_grant_id": res.get("capability_grant_id"),
                 "approved_permission_level": res.get("approved_permission_level"),
+                "activated_profile": activated_profile,
             },
         )
-        return JSONResponse(status_code=200, content={**res, "state_snapshot": _current_snapshot()})
+        out_payload = {**res, "state_snapshot": _current_snapshot()}
+        if activated_profile is not None:
+            out_payload["activated_profile"] = activated_profile
+        return JSONResponse(status_code=200, content=out_payload)
 
     @app.post("/setup/api/pairing/challenges/{challenge_id}/deny")
     async def setup_deny_challenge(challenge_id: str, request: Request) -> Response:
@@ -1477,6 +1837,12 @@ def register_setup_center_routes(
 
         tunnel_id = str(body.get("tunnel_id") or "").strip()
         runtime_api_key = str(body.get("runtime_api_key") or "").strip()
+        auth_mode = str(body.get("auth_mode") or "oauth").strip().lower()
+        if auth_mode not in ("oauth", "auth_none"):
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": "invalid_auth_mode", "error_description": "auth_mode must be 'oauth' or 'auth_none'."},
+            )
         # Immediately remove raw key from dict so it can never be logged or serialized
         body.pop("runtime_api_key", None)
 
@@ -1499,12 +1865,21 @@ def register_setup_center_routes(
                 },
             )
 
+        with state_lock:
+            prev_tunnel = runtime_overrides.get("tunnel_info") or {}
+        effective_reconfigure = bool(is_reconfigure or prev_tunnel.get("configured", False))
+
         hook_key = "reconfigure_tunnel" if is_reconfigure else "connect_chatgpt"
         if hook_key in hooks:
             try:
                 hook_res = await asyncio.to_thread(
                     hooks[hook_key],
-                    {"tunnel_id": tunnel_id, "runtime_api_key": runtime_api_key, "reconfigure": is_reconfigure},
+                    {
+                        "tunnel_id": tunnel_id,
+                        "runtime_api_key": runtime_api_key,
+                        "reconfigure": effective_reconfigure,
+                        "auth_mode": auth_mode,
+                    },
                 )
             except Exception as exc:
                 runtime_api_key = ""
@@ -1516,6 +1891,8 @@ def register_setup_center_routes(
             hook_res = {
                 "action": hook_key,
                 "tunnel_id": tunnel_id,
+                "auth_mode": auth_mode,
+                "auto_reconfigure": effective_reconfigure,
                 "status": "TUNNEL_SETUP_PASS",
                 "readyz_ok": True,
                 "chatgpt_tool_call_verified": False,
@@ -1638,10 +2015,31 @@ def register_setup_center_routes(
             except Exception:
                 pass
 
+        remaining_dels = pers.list_active_owner_delegations(secret=sk, owner_id="local_owner") if hasattr(pers, "list_active_owner_delegations") else []
+        remaining_grants = pers.count_active_owner_grants(owner_id="local_owner") if hasattr(pers, "count_active_owner_grants") else 0
+        if (revoke_all or (len(remaining_dels) == 0 and remaining_grants <= 0)) and not bool(body.get("reset_emergency_stop", False)):
+            if hasattr(pers, "clear_owner_approved_profile"):
+                try:
+                    pers.clear_owner_approved_profile(secret=sk, reason=reason)
+                except Exception:
+                    pass
+            if hasattr(gw, "switch_policy_profile"):
+                try:
+                    gw.switch_policy_profile("read_only", reason=reason)
+                except Exception:
+                    pass
+            await asyncio.to_thread(
+                _sync_external_adapter_owner_endpoint,
+                "/oauth/owner/revoke",
+                {"revoke_all": revoke_all, "delegation_id": delegation_id, "grant_id": grant_id, "client_id": client_id, "reason": reason},
+            )
+
         if bool(body.get("engage_emergency_stop", False)):
             gw.engage_emergency_stop(reason=reason)
+            await asyncio.to_thread(_sync_external_adapter_owner_endpoint, "/oauth/owner/emergency-stop", {"reason": reason})
         elif bool(body.get("reset_emergency_stop", False)):
             gw.reset_emergency_stop()
+            await asyncio.to_thread(_sync_external_adapter_owner_endpoint, "/oauth/owner/emergency-stop/reset", {"reason": reason})
 
         gw.policy.audit.log_event(
             tool_name="setup_center_revoke_access",

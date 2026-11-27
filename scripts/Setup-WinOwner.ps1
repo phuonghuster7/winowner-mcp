@@ -114,7 +114,8 @@ try {
         $pyw = Join-Path $root ".venv\Scripts\pythonw.exe"
         $runner = Join-Path $root "scripts\Run-WinOwnerMcp.py"
         if ((Test-Path -LiteralPath $pyw) -and (Test-Path -LiteralPath $runner)) {
-            Start-Process -FilePath $pyw -ArgumentList @("-u", ('"{0}"' -f $runner), "--port", "$Port", "--profile", $profile, "--setup-center", "--open-browser") -WorkingDirectory $root -WindowStyle Hidden
+            $consolePort = if ($Port -eq 8768) { 8767 } else { [Math]::Max(1024, $Port - 1) }
+            Start-Process -FilePath $pyw -ArgumentList @("-u", ('"{0}"' -f $runner), "--port", "$Port", "--console-port", "$consolePort", "--profile", $profile, "--open-setup") -WorkingDirectory $root -WindowStyle Hidden
         }
     } else {
         Write-Host "No additional windows are launched by this installer."

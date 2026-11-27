@@ -34,7 +34,7 @@ Hai giá trị này có mục đích khác nhau; không phải hai API key. Ti�
 
 Xem [hướng dẫn thêm custom MCP server của OpenAI](https://developers.openai.com/api/docs/guides/custom-mcp-server). Kiểm tra thông tin plugin và quyền truy cập được yêu cầu. Giữ chế độ chỉ đọc (`read_only`) để nghiệm thu bước đầu.
 
-Authentication None không có nghĩa là bỏ xác thực phía máy; HTTP 401 có thể xuất hiện khi chưa được cấp quyền. Vì `Authentication: None` qua tunnel không mang danh tính client riêng nên luôn giới hạn ở chế độ chỉ đọc (`Read`). Để nâng lên quyền chủ máy (`Scoped` / `Owner`), cần ghép nối OAuth 2.1 có xác minh và phê duyệt một lần ngay trong **WinOwner Setup Center** (`http://127.0.0.1:8767/setup`) hoặc `Grant-OwnerAccess.cmd` (không cần nhập `client_id` thủ công, không dán owner token vào ChatGPT).
+Authentication None không có nghĩa là bỏ xác thực phía máy; HTTP 401 có thể xuất hiện khi chưa được cấp quyền. Vì `Authentication: None` qua tunnel không mang danh tính client riêng nên luôn giới hạn ở chế độ chỉ đọc (`Read`). Để nâng lên quyền chủ máy (`Scoped` / `Owner`), ghép nối OAuth 2.1 rồi nhấp đúp `Open-SetupCenter.cmd` (tự động đăng nhập theo người dùng Windows, không cần nhập Admin Key) và bấm một nút **"Xác nhận cấp quyền chủ máy"** trong **WinOwner Setup Center** (hoặc `Grant-OwnerAccess.cmd`) — phiên đã duyệt tự duy trì qua các lần khởi động lại cho tới khi hết hạn hoặc bị thu hồi.
 
 ## 4. Quyền plugin (tùy chọn)
 
@@ -58,7 +58,7 @@ flowchart LR
 
 ## Xử lý sự cố và ngắt kết nối
 
-Nhấn **Win + R**, mở `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` rồi dùng `Check-WinOwner.cmd` (hoặc `Check-WinOwner.cmd -OpenSetupCenter` để mở giao diện Setup Center).
+Nhấn **Win + R**, mở `%LOCALAPPDATA%\WinOwnerMCP\v1.2.0` rồi dùng `Open-SetupCenter.cmd` để mở giao diện Setup Center (hoặc `Check-WinOwner.cmd` để kiểm tra nhanh).
 
 `Disconnect-ChatGPT.cmd` ngắt tunnel cục bộ; `Uninstall-WinOwner.cmd` dừng và gỡ dịch vụ đã xác minh. Thu hồi quyền bất cứ lúc nào trong Setup Center hoặc `Revoke-OwnerAccess.cmd`. Không tự chuyển Full Control chỉ để sửa lỗi kết nối.
 
