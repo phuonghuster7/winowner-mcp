@@ -187,6 +187,15 @@ def test_adapter_health_and_readyz_report_actual_custom_port(tmp_path: Path):
     assert r_wk.status_code == 200, r_wk.text
     wk = r_wk.json()
     assert wk["resource_uri"] == f"http://127.0.0.1:{custom_port}/mcp"
+    assert f"http://127.0.0.1:{custom_port}" in wk["authorization_servers"]
+
+    r_as = client.get("/.well-known/oauth-authorization-server")
+    assert r_as.status_code == 200, r_as.text
+    as_meta = r_as.json()
+    assert as_meta["issuer_url"] == f"http://127.0.0.1:{custom_port}"
+    assert as_meta["token_endpoint_url"] == f"http://127.0.0.1:{custom_port}/oauth/token"
+    assert as_meta["authorization_endpoint_url"] == f"http://127.0.0.1:{custom_port}/oauth/authorize"
+    assert as_meta["registration_endpoint_url"] == f"http://127.0.0.1:{custom_port}/oauth/register"
 
     r_ready = client.get("/readyz")
     assert r_ready.status_code == 200, r_ready.text
@@ -342,16 +351,17 @@ def test_real_setup_center_action_hooks_no_mock_fallbacks(tmp_path: Path):
     assert res_rep["repaired"] is True
     assert any("Bootstrap-WindowsMcp.ps1" in " ".join(c) and "-NoPythonInstall" in c for c in invocations)
 
-    # 2c. connect_chatgpt normalizes uppercase tunnel_id
+    # 2c. connect_chatgpt normalizes uppercase tunnel_id and defaults auth_mode to auth_none when omitted
     res_conn = hooks["connect_chatgpt"](
         {
             "tunnel_id": "TUNNEL_ABCDEF0123456789ABCDEF0123456789",
             "runtime_api_key": secret_val,
-            "auth_mode": "oauth",
         }
     )
     assert res_conn["tunnel_id"] == "tunnel_abcdef0123456789abcdef0123456789"
+    assert res_conn["auth_mode"] == "auth_none"
     assert res_conn["readyz_ok"] is True
+    assert any("-AuthMode 'auth_none'" in " ".join(c) for c in invocations)
 
     # 2d. check_updates (newer release, non-semver rejection, graceful offline fallback)
     upd = hooks["check_updates"]({})
@@ -416,10 +426,15 @@ def test_real_setup_center_action_hooks_no_mock_fallbacks(tmp_path: Path):
 
 
 def test_connect_chatgpt_reuses_cached_verified_runtime_hashes():
-    """Verify Connect-ChatGPT.ps1 checks verified-runtime-hashes.json SHA-256 cache before downloading ZIP."""
+    """Verify Connect-ChatGPT.ps1 checks verified-runtime-hashes.json SHA-256 cache and captures sanitized doctor output."""
     content = (_PROJECT_ROOT / "scripts" / "Connect-ChatGPT.ps1").read_text(encoding="utf-8")
     assert "verified-runtime-hashes.json" in content
     assert "$cached.version -eq $version" in content
     assert "$cached.manifest_hash -eq $manifestHash" in content
     assert "Get-PortableSha256" in content
     assert "$stageCacheFile" in content
+    # Verify doctor output capture & secret scrubbing on pre-cutover failure
+    assert "$doctorRaw=" in content
+    assert "$doctorExit=$LASTEXITCODE" in content
+    assert "[REDACTED]" in content
+    assert "Tunnel doctor failed; no autostart task registered and existing configuration was not modified" in content

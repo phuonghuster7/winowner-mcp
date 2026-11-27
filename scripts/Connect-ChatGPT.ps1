@@ -273,8 +273,39 @@ mcp:
 
     # 2. Pre-cutover validation: run doctor against STAGED config while live tunnel remains untouched
     $stageExe=Join-Path $temp 'tunnel-client.exe'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner -Doctor -ProfilePath $stageProfile -PlaneKeyPath $stagePlane -LocalKeyPath $stageLocal -BinaryPath $stageExe
-    if($LASTEXITCODE -ne 0){throw 'Tunnel doctor failed; no autostart task registered and existing configuration was not modified'}
+    $prevEap=$ErrorActionPreference
+    $ErrorActionPreference='Continue'
+    try{
+        $doctorRaw=& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runner -Doctor -ProfilePath $stageProfile -PlaneKeyPath $stagePlane -LocalKeyPath $stageLocal -BinaryPath $stageExe 2>&1
+        $doctorExit=$LASTEXITCODE
+    }finally{
+        $ErrorActionPreference=$prevEap
+    }
+    if($doctorExit -ne 0){
+        $planeSecret=''
+        try{if(Test-Path -LiteralPath $stagePlane -PathType Leaf){$planeSecret=([IO.File]::ReadAllText($stagePlane,[Text.Encoding]::UTF8)).Trim()}}catch{}
+        $diagLines=@()
+        foreach($item in @($doctorRaw)){
+            if($null -eq $item){continue}
+            $line=([string]$item).Trim()
+            if(-not $line){continue}
+            if($planeSecret -and $line.Contains($planeSecret)){$line=$line.Replace($planeSecret,'[REDACTED]')}
+            if($local -and $line.Contains($local)){$line=$line.Replace($local,'[REDACTED]')}
+            $line=[regex]::Replace($line,'(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+','$1[REDACTED]')
+            $line=[regex]::Replace($line,'(?i)(sk-[A-Za-z0-9._-]+)','[REDACTED]')
+            if($line -notmatch '^(At line:|CategoryInfo|FullyQualifiedErrorId|\+\s*~)'){
+                $diagLines += $line
+            }
+        }
+        $planeSecret=''
+        $diagTail=''
+        if($diagLines.Count -gt 0){
+            $tailSlice=@($diagLines | Select-Object -Last 6)
+            $diagTail=' [' + ($tailSlice -join ' | ') + ']'
+            if($diagTail.Length -gt 420){$diagTail=$diagTail.Substring(0,417) + '...]'}
+        }
+        throw ('Tunnel doctor failed; no autostart task registered and existing configuration was not modified' + $diagTail)
+    }
 
     # If reconfiguring to a new TunnelId (or when old task is not running) and starting is requested,
     # validate live candidate readiness (/readyz) BEFORE stopping or cutting over the existing tunnel!

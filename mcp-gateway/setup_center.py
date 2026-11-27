@@ -1673,15 +1673,15 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
             <div class="field-group">
               <span class="field-label" id="lbl-access-mode">Mức truy cập ban đầu</span>
               <div class="mode-choices" role="radiogroup" aria-labelledby="lbl-access-mode">
-                <label class="mode-card" id="mode-card-readonly">
-                  <input type="radio" name="connect_auth_mode" id="mode-radio-auth-none" value="auth_none" />
+                <label class="mode-card selected" id="mode-card-readonly">
+                  <input type="radio" name="connect_auth_mode" id="mode-radio-auth-none" value="auth_none" checked />
                   <div>
                     <div class="mode-card-title" id="mode-readonly-title">Chỉ xem (mặc định)</div>
                     <div class="mode-card-desc" id="mode-readonly-desc">Chỉ đọc thông tin an toàn, không thay đổi tệp.</div>
                   </div>
                 </label>
-                <label class="mode-card selected" id="mode-card-confirm">
-                  <input type="radio" name="connect_auth_mode" id="mode-radio-oauth" value="oauth" checked />
+                <label class="mode-card" id="mode-card-confirm">
+                  <input type="radio" name="connect_auth_mode" id="mode-radio-oauth" value="oauth" />
                   <div>
                     <div class="mode-card-title" id="mode-confirm-title">Cho phép thao tác khi tôi xác nhận</div>
                     <div class="mode-card-desc" id="mode-confirm-desc">Có thể cấp quyền làm việc sau khi bạn xác nhận ở bước kế tiếp.</div>
@@ -1944,8 +1944,8 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
           <div class="field-group">
             <label class="field-label" for="reconfig-auth-mode" id="lbl-reconfig-mode">Chế độ kết nối</label>
             <select id="reconfig-auth-mode">
-              <option value="oauth" selected>Cho phép thao tác khi tôi xác nhận (OAuth 2.1)</option>
-              <option value="auth_none">Chỉ xem (Authentication: None)</option>
+              <option value="auth_none" selected>Chỉ xem (Authentication: None — Mặc định Tunnel cục bộ)</option>
+              <option value="oauth">Cho phép thao tác khi tôi xác nhận (OAuth 2.1)</option>
             </select>
           </div>
           <div class="adv-action-row">
@@ -3054,13 +3054,13 @@ SETUP_CENTER_HTML_PAGE = """<!DOCTYPE html>
       const keyEl = document.getElementById(isReconfigure ? 'reconfig-runtime-key' : 'input-runtime-key');
       const tid = (tidEl.value || '').trim().toLowerCase();
       const apiKey = (keyEl.value || '').trim();
-      let authMode = 'oauth';
+      let authMode = 'auth_none';
       if (isReconfigure) {
         const sel = document.getElementById('reconfig-auth-mode');
-        authMode = sel ? sel.value : 'oauth';
+        authMode = sel ? sel.value : 'auth_none';
       } else {
         const checked = document.querySelector('input[name="connect_auth_mode"]:checked');
-        authMode = checked ? checked.value : 'oauth';
+        authMode = checked ? checked.value : 'auth_none';
       }
 
       if (!/^tunnel_(?:[a-z0-9]{32}|[a-z0-9]{4}_[a-z0-9]{32})$/.test(tid)) {
@@ -4147,7 +4147,7 @@ def register_setup_center_routes(
 
         tunnel_id = str(body.get("tunnel_id") or "").strip().lower()
         runtime_api_key = str(body.get("runtime_api_key") or "").strip()
-        auth_mode = str(body.get("auth_mode") or "oauth").strip().lower()
+        auth_mode = str(body.get("auth_mode") or "auth_none").strip().lower()
         if auth_mode not in ("oauth", "auth_none"):
             return JSONResponse(
                 status_code=400,

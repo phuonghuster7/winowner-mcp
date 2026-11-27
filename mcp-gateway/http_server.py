@@ -3465,8 +3465,13 @@ def register_oauth_endpoints(
                     return ext_issuer, ext_issuer, True
             except Exception:
                 pass
-        base = os.getenv("MCP_OAUTH_ISSUER") or "http://127.0.0.1:8768"
-        base = base.rstrip("/")
+        env_issuer = os.getenv("MCP_OAUTH_ISSUER", "").strip()
+        if env_issuer:
+            base = env_issuer.rstrip("/")
+        else:
+            bound_port = getattr(getattr(app, "state", None), "bound_port", None)
+            eff_port = int(bound_port) if (isinstance(bound_port, int) and bound_port > 0) else 8768
+            base = f"http://127.0.0.1:{eff_port}"
         return base, None, False
 
     @app.get("/.well-known/oauth-protected-resource")

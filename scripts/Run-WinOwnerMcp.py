@@ -360,7 +360,7 @@ def build_setup_center_action_hooks(
     def _run_connect_script(payload: dict[str, Any], *, force_reconfigure: bool) -> dict[str, Any]:
         tunnel_id = str(payload.get("tunnel_id") or "").strip().lower()
         runtime_api_key = str(payload.get("runtime_api_key") or "").strip()
-        auth_mode = str(payload.get("auth_mode") or "oauth").strip().lower()
+        auth_mode = str(payload.get("auth_mode") or "auth_none").strip().lower()
         if not _TUNNEL_ID_RE.match(tunnel_id):
             raise RuntimeError("Invalid OpenAI Tunnel ID format")
         if auth_mode not in ("oauth", "auth_none"):

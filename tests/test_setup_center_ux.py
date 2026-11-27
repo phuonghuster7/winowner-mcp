@@ -857,7 +857,20 @@ def test_auto_config_tunnel_auth_mode_and_open_setup_center_launcher_contract():
         assert bad_mode.status_code == 400
         assert bad_mode.json()["error"] == "invalid_auth_mode"
 
-        # First connect with oauth -> auto_reconfigure is False
+        # Omitting auth_mode defaults cleanly to auth_none (local Private Tunnel safe default)
+        default_conn = c_client.post(
+            "/setup/api/actions/connect-chatgpt",
+            headers=csrf_hdr,
+            json={
+                "tunnel_id": "tunnel_1234567890abcdef1234567890abcdef",
+                "runtime_api_key": "rk_valid_length_runtime_key_test_1234567890",
+            },
+        )
+        assert default_conn.status_code == 200
+        assert default_conn.json()["summary"]["auth_mode"] == "auth_none"
+        assert default_conn.json()["summary"]["auto_reconfigure"] is False
+
+        # Explicit oauth mode is still honored (and detects existing tunnel -> auto_reconfigure is True)
         first_conn = c_client.post(
             "/setup/api/actions/connect-chatgpt",
             headers=csrf_hdr,
@@ -869,16 +882,15 @@ def test_auto_config_tunnel_auth_mode_and_open_setup_center_launcher_contract():
         )
         assert first_conn.status_code == 200
         assert first_conn.json()["summary"]["auth_mode"] == "oauth"
-        assert first_conn.json()["summary"]["auto_reconfigure"] is False
+        assert first_conn.json()["summary"]["auto_reconfigure"] is True
 
-        # Second connect detects existing tunnel -> auto_reconfigure is True
+        # Reconfigure omitting auth_mode also defaults to auth_none
         second_conn = c_client.post(
-            "/setup/api/actions/connect-chatgpt",
+            "/setup/api/actions/reconfigure-tunnel",
             headers=csrf_hdr,
             json={
                 "tunnel_id": "tunnel_abcdef1234567890abcdef1234567890",
                 "runtime_api_key": "rk_valid_length_runtime_key_test_9876543210",
-                "auth_mode": "auth_none",
             },
         )
         assert second_conn.status_code == 200
@@ -1108,6 +1120,11 @@ def test_fluent_four_step_wizard_zero_jargon_and_zero_innerhtml_anywhere():
         key_wipe_pos = submit_fn_body.find("keyEl.value = ''")
         assert api_call_pos != -1 and key_wipe_pos != -1
         assert key_wipe_pos > api_call_pos, "keyEl.value must ONLY be wiped AFTER await apiCall() succeeds!"
+        # Default Private Tunnel auth_mode must be auth_none on Step 2 UI, Advanced Reconfigure, and JS submitConnectChatGPT
+        assert 'id="mode-radio-auth-none" value="auth_none" checked' in html
+        assert 'id="mode-radio-oauth" value="oauth" />' in html
+        assert '<option value="auth_none" selected>' in html
+        assert "let authMode = 'auth_none';" in submit_fn_body
         assert 'id="s2-error-alert" class="callout danger hidden" role="alert"' in html
         assert "res.status === 403" in html
         assert "window.addEventListener('focus'" in html
