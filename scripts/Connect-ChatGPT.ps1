@@ -95,6 +95,31 @@ function Wait-TunnelHealthReady([string]$urlFile,[int]$timeoutSec){
 }
 
 function Verify-OfficialZip([string]$temp){
+    $requiredRuntimeFiles=@('tunnel-client.exe','cloudflared.exe','cloudflared-manifest.json')
+    $cacheFile=Join-Path $clientDir 'verified-runtime-hashes.json'
+    if((-not $ArchivePath) -and (-not $ChecksumPath) -and (Test-Path -LiteralPath $cacheFile -PathType Leaf)){
+        try{
+            $cached=Get-Content -LiteralPath $cacheFile -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+            if([string]$cached.version -eq $version -and [string]$cached.manifest_hash -eq $manifestHash -and $null -ne $cached.files){
+                $allValid=$true
+                foreach($name in $requiredRuntimeFiles){
+                    $livePath=Join-Path $clientDir $name
+                    $expectedHash=[string]$cached.files.$name
+                    if((-not $expectedHash) -or (-not (Test-Path -LiteralPath $livePath -PathType Leaf)) -or ((Get-PortableSha256 $livePath) -ne $expectedHash.ToLowerInvariant())){
+                        $allValid=$false
+                        break
+                    }
+                }
+                if($allValid){
+                    foreach($name in $requiredRuntimeFiles){
+                        Copy-Item -LiteralPath (Join-Path $clientDir $name) -Destination (Join-Path $temp $name) -Force
+                    }
+                    Copy-Item -LiteralPath $cacheFile -Destination (Join-Path $temp 'verified-runtime-hashes.json') -Force
+                    return (Join-Path $temp 'tunnel-client.exe')
+                }
+            }
+        }catch{}
+    }
     $zip=Join-Path $temp $asset
     $sums=Join-Path $temp 'SHA256SUMS.txt'
     if($ArchivePath -or $ChecksumPath){
@@ -117,13 +142,23 @@ function Verify-OfficialZip([string]$temp){
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive=[IO.Compression.ZipFile]::OpenRead($zip)
     try{
-        foreach($name in @('tunnel-client.exe','cloudflared.exe','cloudflared-manifest.json')){
+        $extractedHashes=[ordered]@{}
+        foreach($name in $requiredRuntimeFiles){
             $entries=@($archive.Entries | Where-Object {$_.FullName -eq $name})
             if($entries.Count -ne 1 -or $entries[0].Length -lt 100){
                 throw "Missing official Windows tunnel runtime component: $name"
             }
-            [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0],(Join-Path $temp $name),$true)
+            $outPath=Join-Path $temp $name
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0],$outPath,$true)
+            $extractedHashes[$name]=(Get-PortableSha256 $outPath)
         }
+        $cacheObj=[ordered]@{
+            version=$version
+            manifest_hash=$manifestHash
+            zip_sha256=$expected
+            files=$extractedHashes
+        }
+        [IO.File]::WriteAllText((Join-Path $temp 'verified-runtime-hashes.json'),($cacheObj | ConvertTo-Json -Depth 4),[Text.UTF8Encoding]::new($false))
         return (Join-Path $temp 'tunnel-client.exe')
     }finally{$archive.Dispose()}
 }
@@ -332,6 +367,10 @@ mcp:
     Protect-File $profile
     foreach($name in @('tunnel-client.exe','cloudflared.exe','cloudflared-manifest.json')){
         Copy-Item -LiteralPath (Join-Path $temp $name) -Destination (Join-Path $clientDir $name) -Force
+    }
+    $stageCacheFile=Join-Path $temp 'verified-runtime-hashes.json'
+    if(Test-Path -LiteralPath $stageCacheFile -PathType Leaf){
+        Copy-Item -LiteralPath $stageCacheFile -Destination (Join-Path $clientDir 'verified-runtime-hashes.json') -Force
     }
 
     if($SimulateCutoverFailure){

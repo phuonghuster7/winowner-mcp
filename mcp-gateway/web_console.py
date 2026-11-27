@@ -1284,6 +1284,31 @@ def create_web_console_app(
             "tools_count": len(gw.exposed_tool_names()),
         }
 
+    @app.get("/readyz")
+    async def readyz() -> Response:
+        pol = getattr(gw, "policy", None)
+        pers = getattr(app.state, "setup_center_persistence", None) or getattr(gw, "_oauth_persistence", None)
+        db_ready = True
+        if pers is not None and hasattr(pers, "_db"):
+            try:
+                with pers._db() as conn:
+                    conn.execute("SELECT 1").fetchone()
+            except Exception:
+                db_ready = False
+        is_ready = bool(pol is not None and db_ready)
+        return JSONResponse(
+            status_code=200 if is_ready else 503,
+            content={
+                "status": "ready" if is_ready else "not_ready",
+                "ready": is_ready,
+                "service": "mode-b-owner-web-console",
+                "adapter_port": int(adapter_port),
+                "profile": str(getattr(pol, "profile", "unknown")) if pol is not None else "unknown",
+                "db_ready": db_ready,
+                "emergency_stop": bool(pol.is_emergency_stop_active()) if pol is not None else False,
+            },
+        )
+
     @app.get("/", response_class=HTMLResponse)
     @app.get("/console", response_class=HTMLResponse)
     async def console_ui() -> Response:
@@ -3209,16 +3234,41 @@ def create_web_console_app(
 
     from setup_center import register_setup_center_routes  # noqa: E402
 
-    def _create_handoff_web_session(client_ip: str = "127.0.0.1") -> tuple[WebConsoleAuthSession, bool]:
+    def _create_handoff_web_session(
+        client_ip: str = "127.0.0.1",
+        existing_cookie: str | None = None,
+    ) -> tuple[WebConsoleAuthSession, bool]:
         now = time.time()
+        loopback_hosts = {"127.0.0.1", "::1", "localhost", "testclient"}
         with lock:
             active_s = {sid: s for sid, s in web_sessions.items() if s.is_valid(now=now)}
-            if len(active_s) >= max_concurrent_sessions:
-                oldest_sid = min(active_s.keys(), key=lambda k: active_s[k].created_at)
-                active_s[oldest_sid].revoked = True
-                active_s.pop(oldest_sid, None)
             web_sessions.clear()
             web_sessions.update(active_s)
+
+            # A1 Fix: Reuse & extend an existing valid loopback web session (preserving its csrf_token
+            # across all open browser tabs) instead of rotating the cookie and triggering 403 CSRF mismatch.
+            if existing_cookie:
+                existing_sid = _verify_session_cookie(existing_cookie)
+                if existing_sid and existing_sid in web_sessions:
+                    existing_ws = web_sessions[existing_sid]
+                    if existing_ws.is_valid(now=now):
+                        existing_ws.expires_at = now + session_cookie_ttl_seconds
+                        return existing_ws, trust_proxy
+            if str(client_ip or "").strip().lower() in loopback_hosts and web_sessions:
+                loopback_candidates = [
+                    s
+                    for s in web_sessions.values()
+                    if s.is_valid(now=now) and str(s.client_ip or "").strip().lower() in loopback_hosts
+                ]
+                if loopback_candidates:
+                    reused = max(loopback_candidates, key=lambda s: s.created_at)
+                    reused.expires_at = now + session_cookie_ttl_seconds
+                    return reused, trust_proxy
+
+            if len(web_sessions) >= max_concurrent_sessions:
+                oldest_sid = min(web_sessions.keys(), key=lambda k: web_sessions[k].created_at)
+                web_sessions[oldest_sid].revoked = True
+                web_sessions.pop(oldest_sid, None)
 
             web_session_id = f"wsess_{uuid.uuid4().hex}"
             cookie_token = _sign_session_id(web_session_id)

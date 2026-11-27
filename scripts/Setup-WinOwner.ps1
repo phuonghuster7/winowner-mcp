@@ -15,7 +15,8 @@ param(
     [switch]$OpenSetupCenter,
     [switch]$ReadOnly,
     [switch]$OwnerFullControl,
-    [ValidateRange(1024, 65535)][int]$Port = 8768
+    [ValidateRange(1024, 65535)][int]$Port = 8768,
+    [ValidateRange(0, 65535)][int]$ConsolePort = 0
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -24,6 +25,7 @@ $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $bootstrap = Join-Path $PSScriptRoot "Bootstrap-WindowsMcp.ps1"
 $guide = Join-Path $root "docs\START_HERE.vi.md"
 $powershellExe = Join-Path $PSHOME "powershell.exe"
+$effectiveConsolePort = if ($ConsolePort -ge 1024) { $ConsolePort } elseif ($Port -eq 8768) { 8767 } else { [Math]::Max(1024, $Port - 1) }
 
 function Write-SetupResult([string]$state, [string]$mode) {
     # No secrets or OAuth values are written to this human-readable summary.
@@ -36,7 +38,7 @@ function Write-SetupResult([string]$state, [string]$mode) {
         "Local profile: $mode",
         "ChatGPT connected: NOT YET (connector None is possible with separately authenticated tunnel)",
         "Local MCP: http://127.0.0.1:$Port/mcp",
-        "WinOwner Setup Center: http://127.0.0.1:8767/setup",
+        "WinOwner Setup Center: http://127.0.0.1:$effectiveConsolePort/setup",
         "Next steps (English): README.md",
         "Next steps (Vietnamese): README.vi.md",
         "This file contains no keys or authentication tokens."
@@ -114,8 +116,7 @@ try {
         $pyw = Join-Path $root ".venv\Scripts\pythonw.exe"
         $runner = Join-Path $root "scripts\Run-WinOwnerMcp.py"
         if ((Test-Path -LiteralPath $pyw) -and (Test-Path -LiteralPath $runner)) {
-            $consolePort = if ($Port -eq 8768) { 8767 } else { [Math]::Max(1024, $Port - 1) }
-            Start-Process -FilePath $pyw -ArgumentList @("-u", ('"{0}"' -f $runner), "--port", "$Port", "--console-port", "$consolePort", "--profile", $profile, "--open-setup") -WorkingDirectory $root -WindowStyle Hidden
+            Start-Process -FilePath $pyw -ArgumentList @("-u", ('"{0}"' -f $runner), "--port", "$Port", "--console-port", "$effectiveConsolePort", "--profile", $profile, "--open-setup") -WorkingDirectory $root -WindowStyle Hidden
         }
     } else {
         Write-Host "No additional windows are launched by this installer."

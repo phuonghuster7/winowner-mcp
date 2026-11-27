@@ -606,7 +606,8 @@ def test_setup_center_emergency_stop_and_check_winowner_script_contract():
             assert marker in check_ps, marker
 
         setup_ps = (PROJECT_ROOT / "scripts" / "Setup-WinOwner.ps1").read_text(encoding="utf-8")
-        assert "WinOwner Setup Center: http://127.0.0.1:8767/setup" in setup_ps
+        assert "WinOwner Setup Center: http://127.0.0.1:$effectiveConsolePort/setup" in setup_ps
+        assert "8767" in setup_ps
         assert "Four-step state:" in setup_ps
         assert "OpenSetupCenter" in setup_ps
     finally:
