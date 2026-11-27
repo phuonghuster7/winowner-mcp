@@ -3240,6 +3240,8 @@ def create_web_console_app(
     ) -> tuple[WebConsoleAuthSession, bool]:
         now = time.time()
         loopback_hosts = {"127.0.0.1", "::1", "localhost", "testclient"}
+        # Verify existing cookie BEFORE acquiring non-reentrant `lock` (_verify_cookie_token acquires `lock`).
+        verified_existing_ws = _verify_cookie_token(existing_cookie) if existing_cookie else None
         with lock:
             active_s = {sid: s for sid, s in web_sessions.items() if s.is_valid(now=now)}
             web_sessions.clear()
@@ -3247,13 +3249,11 @@ def create_web_console_app(
 
             # A1 Fix: Reuse & extend an existing valid loopback web session (preserving its csrf_token
             # across all open browser tabs) instead of rotating the cookie and triggering 403 CSRF mismatch.
-            if existing_cookie:
-                existing_sid = _verify_session_cookie(existing_cookie)
-                if existing_sid and existing_sid in web_sessions:
-                    existing_ws = web_sessions[existing_sid]
-                    if existing_ws.is_valid(now=now):
-                        existing_ws.expires_at = now + session_cookie_ttl_seconds
-                        return existing_ws, trust_proxy
+            if verified_existing_ws is not None and verified_existing_ws.web_session_id in web_sessions:
+                existing_ws = web_sessions[verified_existing_ws.web_session_id]
+                if existing_ws.is_valid(now=now):
+                    existing_ws.expires_at = now + session_cookie_ttl_seconds
+                    return existing_ws, trust_proxy
             if str(client_ip or "").strip().lower() in loopback_hosts and web_sessions:
                 loopback_candidates = [
                     s

@@ -113,6 +113,19 @@ def test_handoff_reuses_valid_cookie_session_and_preserves_csrf(tmp_path: Path):
     csrf_1 = d1["csrf_token"]
     ws_id_1 = d1["web_session_id"]
 
+    # Tab 1 (already holding valid mcp_console_session cookie!) redeems another handoff ticket
+    # -> directly exercises existing_cookie verification without NameError or non-reentrant lock deadlock
+    t1_repeat = app.state.issue_local_handoff_ticket(ttl_seconds=60.0)
+    r1_repeat = client_tab1.post(
+        "/setup/api/local-handoff",
+        json={"handoff_code": t1_repeat["handoff_code"]},
+        headers={"Origin": "http://127.0.0.1:19767"},
+    )
+    assert r1_repeat.status_code == 200, r1_repeat.text
+    d1_repeat = r1_repeat.json()
+    assert d1_repeat["web_session_id"] == ws_id_1
+    assert d1_repeat["csrf_token"] == csrf_1
+
     # Tab 2 opens Setup Center via a fresh handoff ticket #2 (simulating Open-WinOwnerSetup.cmd)
     client_tab2 = TestClient(app)
     t2 = app.state.issue_local_handoff_ticket(ttl_seconds=60.0)
