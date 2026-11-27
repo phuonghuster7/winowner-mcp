@@ -225,8 +225,11 @@ def create_cloud_autonomous_adapter_app(
     policy_path: str | Path | None = None,
     db_path: str | Path | None = None,
     enable_direct_coding: bool | None = None,
+    restore_approved_profile: bool = False,
+    port: int | None = None,
 ) -> FastAPI:
     """Create a FastAPI ASGI application serving the Dedicated Cloud Autonomous Adapter on Port 8768."""
+    effective_port = int(port) if port is not None else int(os.getenv("WINDOWS_MCP_AUTONOMOUS_ADAPTER_PORT", "8768"))
     if gateway is not None:
         gw = gateway
     else:
@@ -254,6 +257,7 @@ def create_cloud_autonomous_adapter_app(
         redoc_url=None,
     )
     app.state.gateway = gw
+    app.state.bound_port = effective_port
     app.state.caller_auth_token = resolved_caller_token
     app.state.oauth_signing_key = resolved_oauth_signing_key
     app.state.owner_admin_token = resolved_owner_admin_token
@@ -273,6 +277,27 @@ def create_cloud_autonomous_adapter_app(
     gw._oauth_signing_key = resolved_oauth_signing_key
     gw._owner_admin_token = resolved_owner_admin_token
     gw._revoked_oauth_tokens = app.state.revoked_oauth_tokens
+
+    # Track UX-1: Restore HMAC-verified owner-approved profile across process restart ONLY when opted in,
+    # an active non-expired non-revoked delegation exists in SQLite, and Emergency Stop is NOT active.
+    if (
+        restore_approved_profile
+        and getattr(gw, "policy", None) is not None
+        and getattr(gw.policy, "profile", "read_only") == "read_only"
+        and not (hasattr(gw, "is_emergency_stop_active") and gw.is_emergency_stop_active())
+        and hasattr(persistence, "get_owner_approved_profile")
+        and hasattr(gw, "switch_policy_profile")
+    ):
+        try:
+            persisted_state = persistence.get_owner_approved_profile(
+                secret=resolved_oauth_signing_key,
+                owner_id=app.state.expected_owner_id,
+            )
+            eff_restored = str(persisted_state.get("effective_profile") or "read_only")
+            if persisted_state.get("valid") and eff_restored != "read_only":
+                gw.switch_policy_profile(eff_restored, reason="restart_restore_owner_approved_profile")
+        except Exception:
+            pass
 
     # Durable SQLite persistence for MCP Stream sessions (Task 1)
     session_store = _SQLiteMcpSessionStore(resolved_db_path)
@@ -345,6 +370,38 @@ def create_cloud_autonomous_adapter_app(
                 "agent_task_cancel",
                 "agent_emergency_stop",
             ])
+        is_estop = bool(gw.is_emergency_stop_active()) if hasattr(gw, "is_emergency_stop_active") else False
+        persistence = getattr(app.state, "oauth_persistence", None)
+        signing_key = str(getattr(app.state, "oauth_signing_key", "") or "")
+        active_delegations = []
+        active_grants_cnt = 0
+        cg_state: dict[str, Any] = {}
+        if persistence is not None:
+            if hasattr(persistence, "list_active_owner_delegations") and signing_key:
+                try:
+                    active_delegations = persistence.list_active_owner_delegations(secret=signing_key)
+                except Exception:
+                    active_delegations = []
+            if hasattr(persistence, "count_active_owner_grants"):
+                try:
+                    active_grants_cnt = int(persistence.count_active_owner_grants())
+                except Exception:
+                    active_grants_cnt = 0
+            if hasattr(persistence, "get_chatgpt_connection_state"):
+                try:
+                    cg_state = persistence.get_chatgpt_connection_state()
+                except Exception:
+                    cg_state = {}
+        profile_str = str(getattr(gw.policy, "profile", "read_only"))
+        has_owner_auth = bool(len(active_delegations) > 0 or active_grants_cnt > 0)
+        if is_estop or profile_str == "read_only":
+            eff_level = "READ"
+        elif is_owner_full_control and has_owner_auth:
+            eff_level = "OWNER"
+        elif has_owner_auth or profile_str in ("developer_p2", "desktop_p3", "full_agent"):
+            eff_level = "SCOPED"
+        else:
+            eff_level = "READ"
         return {
             "status": "ok",
             "service": "cloud-autonomous-loopback-adapter",
@@ -355,15 +412,82 @@ def create_cloud_autonomous_adapter_app(
             "build_id": rel_id["build_id"],
             "zip_sha256": rel_id["zip_sha256"],
             "host": "127.0.0.1",
-            "port": 8768,
+            "port": int(getattr(app.state, "bound_port", effective_port)),
             "surface": "cloud_autonomous",
-            "profile": str(getattr(gw.policy, "profile", "read_only")),
+            "profile": profile_str,
+            "emergency_stop": is_estop,
             "owner_full_control_requires_oauth": True,
+            "owner_identity_verified": has_owner_auth,
+            "active_owner_delegations_count": len(active_delegations),
+            "active_owner_grants_count": active_grants_cnt,
+            "effective_permission_level": eff_level,
+            "chatgpt_read_tool_verified": bool(cg_state.get("verified_read_tool_call", False)),
             "strict_autonomous_tools_only": not coding_enabled,
             "exposed_tools": exposed,
             "require_autonomous_auth": app.state.require_autonomous_auth,
             "allow_loopback_tunnel_identity": app.state.allow_loopback_tunnel_identity,
         }
+
+    @app.get("/readyz")
+    async def readyz() -> Response:
+        """Readiness probe distinct from /health liveness (A3): verifies policy, SQLite persistence, and tunnel status."""
+        bound_port = int(getattr(app.state, "bound_port", effective_port))
+        pol = getattr(gw, "policy", None)
+        profile_str = str(getattr(pol, "profile", "read_only")) if pol is not None else "unknown"
+        is_estop = bool(gw.is_emergency_stop_active()) if hasattr(gw, "is_emergency_stop_active") else False
+
+        db_ready = False
+        pers = getattr(app.state, "oauth_persistence", None)
+        if pers is not None and hasattr(pers, "_db"):
+            try:
+                with pers._db() as conn:
+                    conn.execute("SELECT 1").fetchone()
+                db_ready = True
+            except Exception:
+                db_ready = False
+
+        local_ready = bool(pol is not None and db_ready)
+
+        state_root_env = os.getenv("MCP_STATE_ROOT", "").strip()
+        base_root = Path(state_root_env) if state_root_env else PROJECT_ROOT
+        profile_file = base_root / "runtime" / "tunnel" / "winowner.yaml"
+        health_url_file = base_root / "runtime" / "tunnel" / "health-url.txt"
+        tunnel_configured = profile_file.is_file()
+        tunnel_readyz_ok = False
+        tunnel_status = "TUNNEL_NOT_CONFIGURED"
+        if health_url_file.is_file():
+            try:
+                import urllib.request as _ureq
+                raw_url = health_url_file.read_text(encoding="utf-8", errors="replace").strip()
+                if re.match(r"^http://127\.0\.0\.1:\d{1,5}/?$", raw_url):
+                    with _ureq.urlopen(_ureq.Request(raw_url.rstrip("/") + "/readyz", method="GET"), timeout=1.5) as tr:
+                        if tr.status == 200:
+                            tunnel_readyz_ok = True
+                            tunnel_status = "TUNNEL_READY"
+                        else:
+                            tunnel_status = "TUNNEL_NOT_READY"
+                else:
+                    tunnel_status = "TUNNEL_UNVERIFIED"
+            except Exception:
+                tunnel_status = "TUNNEL_NOT_READY" if tunnel_configured else "TUNNEL_NOT_CONFIGURED"
+        elif tunnel_configured:
+            tunnel_status = "TUNNEL_NOT_RUNNING"
+
+        payload = {
+            "status": "ready" if local_ready else "not_ready",
+            "ready": local_ready,
+            "service": "cloud-autonomous-loopback-adapter",
+            "host": "127.0.0.1",
+            "port": bound_port,
+            "profile": profile_str,
+            "local_service_ready": local_ready,
+            "db_ready": db_ready,
+            "tunnel_configured": tunnel_configured,
+            "tunnel_readyz_ok": tunnel_readyz_ok,
+            "tunnel_status": tunnel_status,
+            "emergency_stop": is_estop,
+        }
+        return JSONResponse(status_code=200 if local_ready else 503, content=payload)
 
     # ------------------------------------------------------------------
     # RFC 8414 & MCP OAuth 2.1 Discovery and Token Management (H05/H06/H07/Sprint 5.5)
@@ -371,7 +495,9 @@ def create_cloud_autonomous_adapter_app(
     external_issuer_env = os.getenv("MCP_OAUTH_EXTERNAL_ISSUER", "").strip().rstrip("/")
     if not (external_issuer_env.startswith("https://") and not any(h in external_issuer_env for h in ("127.0.0.1", "localhost", "::1"))):
         external_issuer_env = ""
-    default_res = os.getenv("MCP_OAUTH_RESOURCE_URI") or (f"{external_issuer_env}/mcp" if external_issuer_env else "http://127.0.0.1:8768/mcp")
+    default_res = os.getenv("MCP_OAUTH_RESOURCE_URI") or (
+        f"{external_issuer_env}/mcp" if external_issuer_env else f"http://127.0.0.1:{effective_port}/mcp"
+    )
     register_oauth_endpoints(
         app,
         issuer="windows-mcp-gateway-autonomous-adapter",
@@ -455,6 +581,8 @@ def create_cloud_autonomous_adapter_app(
                 app.state.mcp_session_last_seen.pop(session_id, None)
 
     def coding_caller_tier(request: Request) -> str:
+        if getattr(gw.policy, "profile", "read_only") == "read_only":
+            return "READ"
         principal = getattr(request.state, "auth_principal", None)
         if principal is not None:
             return principal.tier
@@ -468,8 +596,9 @@ def create_cloud_autonomous_adapter_app(
             if "mcp:owner" in scopes or "mcp:all" in scopes:
                 return "SYSTEM_ADMIN"
             return "WRITE" if "mcp:coding:write" in scopes else "READ"
-        # Reached only after successful verification against owner-configured
-        # shared Bearer token. No session/header identity can reach this path.
+        # Shared static bearer is connector transport auth only (READ unless explicitly non-owner profile).
+        if getattr(gw.policy, "profile", "read_only") in {"read_only", "owner_full_control"}:
+            return "READ"
         return "WRITE"
 
     @app.get("/mcp")
@@ -715,6 +844,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Shared caller authentication token",
     )
+    parser.add_argument(
+        "--restore-approved-profile",
+        action="store_true",
+        help="Restore HMAC-verified owner-approved profile from SQLite when active verified delegation exists",
+    )
     args = parser.parse_args(argv)
 
     # Strictly bind to loopback address (H03)
@@ -726,6 +860,8 @@ def main(argv: list[str] | None = None) -> int:
         policy_path=args.policy_path,
         db_path=args.db_path,
         caller_auth_token=args.caller_token,
+        restore_approved_profile=bool(args.restore_approved_profile),
+        port=args.port,
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

@@ -4,17 +4,19 @@ This is an **operator setup guide**, not an automatic activation script. It assu
 
 ## Start here for first-time users
 
-See [advanced ChatGPT setup](ADVANCED_CHATGPT.vi.md) for obtaining **tunnel_id** and **CONTROL_PLANE_API_KEY** from OpenAI Platform, installing the official tunnel-client, configuring OAuth and verifying the first real tool call.
+For guided setup, open **WinOwner Setup Center** (`http://127.0.0.1:8767/setup` via `Check-WinOwner.cmd -OpenSetupCenter`) or double-click **Connect-ChatGPT.cmd** after local installation. See [advanced ChatGPT setup](ADVANCED_CHATGPT.vi.md) for obtaining **tunnel_id** and **CONTROL_PLANE_API_KEY** from OpenAI Platform, installing the official `tunnel-client`, configuring OAuth 2.1 vs. `Authentication: None`, and verifying the first real tool call.
+
+To reconfigure an existing tunnel safely, use **Reconfigure Tunnel** in WinOwner Setup Center or run `scripts/Connect-ChatGPT.ps1 -Reconfigure`: it verifies scheduled task ownership, backs up existing keys and configuration, validates the candidate configuration and `/readyz` probe before stopping the active tunnel, cuts over atomically, and automatically rolls back with SHA-256 verification on any failure. To disconnect only the verified local tunnel task, use `Disconnect-ChatGPT.cmd`.
 
 Official Secure MCP Tunnel reference: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
 
-**Do not confuse ports:** the standalone authenticated owner-profile one-click adapter listens on **127.0.0.1:8768/mcp** by default. Ports 8765/8766 refer to optional components of the older full stack; do not point a new user's tunnel at those ports unless that stack is actually installed and authenticated. Local bootstrap does **not** install tunnel-client or authorize the ChatGPT plugin.
+**Do not confuse ports:** the standalone authenticated owner-profile one-click adapter listens on **127.0.0.1:8768/mcp** by default, and the local **WinOwner Setup Center** runs on **127.0.0.1:8767/setup**. Do not expose loopback MCP or Setup Center ports directly to the public Internet. Local bootstrap (`LOCAL_READY`) does **not** install `tunnel-client` or authorize the ChatGPT plugin.
 
 ## 1. Local safety checks
 
 - Install the pinned Python requirements and run `scripts/Install-WindowsMcpAgent.ps1 -DryRun` first.
 - Keep every local service bound to `127.0.0.1`. Do not expose 3080, 8765, 8766, 8767 or 8768 directly to the public Internet.
-- The beginner installer selects owner_full_control for verified owners; non-owners and anonymous callers remain denied. Backup existing configs before changing privileges.
+- The beginner installer defaults to read_only. A separately authorized owner may use the supported owner profile; a tunnel connection alone never establishes owner identity. Back up existing configs before changing privileges.
 - Set up a unique OAuth owner identity and the operator's own private tunnel profile; no keys or tunnel IDs are distributed in this repository.
 
 ## 2. Check the local adapter
@@ -38,7 +40,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Connect-ChatGP
   -NewTunnelId "<YOUR_OWN_TUNNEL_ID>" -McpTargetUrl "http://127.0.0.1:8768/mcp"
 ```
 
-The exact connector registration UI and OAuth onboarding steps depend on the ChatGPT account and supported connector type. Never reuse a tunnel ID or token published in somebody else's repository.
+At ChatGPT plugin creation, `Authentication: None` is an option for **read-only (`Read`)** access when WinOwner is authenticated by its private tunnel; choosing `None` by itself never bypasses local HTTP `401` checks and never grants owner permissions because a shared `Authentication: None` tunnel carries no verifiable per-client identity. See [Authentication None for beginners](AUTH_NONE.vi.md).
+
+For **`Scoped` or `Owner` control** (`OWNER_VERIFIED -> OWNER_CONTROL_READY`), connect using **OAuth 2.1 (DCR + PKCE S256)** (`Connect-ChatGPT.ps1 -AuthMode oauth`). When the verified OAuth 2.1 client requests owner pairing (`agent_request_owner_pairing` or `POST /oauth/pairing/request`), WinOwner generates a cryptographic single-use pairing challenge (`XXXX-XXXX`) with TTL and anti-replay protection. Review and click **Approve** or **Deny** locally in **WinOwner Setup Center → Review Owner Access** (or `Grant-OwnerAccess.cmd`). WinOwner binds the resulting delegation and capability grant strictly to that verified OAuth `client_id` — **never enter an OAuth `client_id` manually, never paste an owner token into ChatGPT, and never share tunnel credentials across untrusted clients**.
 
 ## 4. Verify from ChatGPT
 

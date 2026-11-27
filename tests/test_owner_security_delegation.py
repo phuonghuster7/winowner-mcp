@@ -345,7 +345,10 @@ def test_owner_authorized_security_edit_all_8_acceptance_criteria():
             },
         )
         assert res_static["isError"] is True
-        assert "Sensitive or security-control path is denied" in res_static["raw"]
+        assert (
+            "Sensitive or security-control path is denied" in res_static["raw"]
+            or "Caller capability tier does not permit this operation" in res_static["raw"]
+        )
         assert http_srv.read_text(encoding="utf-8") == orig_content
 
         # Also verify owner_oauth_token in tool arguments is rejected
@@ -1225,7 +1228,7 @@ def test_tool_catalog_synchronization_contract_and_dispatch():
         assert task_tool in names_34
 
     # 3. Gateway server tools/list integration
-    gw = MCPGatewayServer()
+    gw = MCPGatewayServer(policy=GatewayPolicy(profile="owner_full_control"))
     # Call tools/list as non-owner
     res_non_owner = gw.handle_jsonrpc_autonomous(
         {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
@@ -1263,7 +1266,7 @@ def test_release_identity_consistency_contract():
     assert "source_commit" in rel_id
     assert "build_id" in rel_id
     assert "zip_sha256" in rel_id
-    assert rel_id["release_version"].startswith("v1.1.")
+    assert rel_id["release_version"].startswith("v1.2.")
     assert rel_id["source_commit"] not in ("", "HEAD")
 
     # 1. initialize RPC response
@@ -1318,7 +1321,11 @@ def test_owner_global_filesystem_access_and_non_owner_isolation():
         )
         assert res_non_owner_create["isError"] is True
         err_msg_create = res_non_owner_create.get("raw", "") + str(res_non_owner_create.get("payload", ""))
-        assert "Workspace/tool has no owner-approved trusted workspace policy" in err_msg_create or "denied" in err_msg_create.lower()
+        assert (
+            "Workspace/tool has no owner-approved trusted workspace policy" in err_msg_create
+            or "Caller capability tier does not permit this operation" in err_msg_create
+            or "denied" in err_msg_create.lower()
+        )
 
         # Non-owner OAuth token cũng bị chặn
         tok_non_owner = _issue_oauth_token(

@@ -186,6 +186,16 @@ def _load_secret_from_env_files() -> str | None:
     if dpapi_secret:
         return dpapi_secret
 
+    try:
+        from http_server import resolve_owner_admin_token_path
+        admin_key_path = resolve_owner_admin_token_path()
+        if admin_key_path.is_file():
+            admin_secret = admin_key_path.read_text(encoding="utf-8", errors="replace").strip()
+            if admin_secret:
+                return admin_secret
+    except Exception:
+        pass
+
     for env_key in ("MCP_AUTH_TOKEN", "MCP_AGENT_APPROVAL_TOKEN", "COMPUTER_API_TOKEN"):
         val = os.getenv(env_key, "").strip()
         if val:
@@ -968,12 +978,22 @@ CONSOLE_HTML_PAGE = """<!DOCTYPE html>
       try {
         const res = await apiCall('/console/api/proposals', 'GET');
         const container = document.getElementById('proposals-list');
-        container.innerHTML = '';
+        container.textContent = '';
         for (const p of res.proposals) {
           const div = document.createElement('div');
           div.className = 'proposal-item';
           const header = document.createElement('div');
-          header.innerHTML = '<strong>' + p.proposal_id + '</strong> — <code>' + p.tool_name + '</code> [' + p.tier + '] — Status: <strong>' + p.status + '</strong>';
+          const idStrong = document.createElement('strong');
+          idStrong.textContent = String(p.proposal_id || '');
+          const toolCode = document.createElement('code');
+          toolCode.textContent = String(p.tool_name || '');
+          const statusStrong = document.createElement('strong');
+          statusStrong.textContent = String(p.status || '');
+          header.appendChild(idStrong);
+          header.appendChild(document.createTextNode(' — '));
+          header.appendChild(toolCode);
+          header.appendChild(document.createTextNode(' [' + String(p.tier || '') + '] — Status: '));
+          header.appendChild(statusStrong);
           const pre = document.createElement('pre');
           pre.textContent = JSON.stringify({ arguments: p.arguments, preview: p.preview, result: p.execution_result, error: p.error_message }, null, 2);
           div.appendChild(header);
@@ -1098,6 +1118,12 @@ def create_web_console_app(
     max_concurrent_sessions: int = 5,
     task_store: Any | None = None,
     grant_broker: Any | None = None,
+    oauth_persistence: Any | None = None,
+    oauth_signing_key: str | None = None,
+    owner_admin_token: str | None = None,
+    db_path: str | Path | None = None,
+    adapter_port: int = 8768,
+    setup_action_hooks: dict[str, Any] | None = None,
 ) -> FastAPI:
     """Create the Mode B Owner-Controlled Web Agent Console ASGI application."""
     if gateway is not None:
@@ -1257,6 +1283,31 @@ def create_web_console_app(
             "emergency_stop": gw.policy.is_emergency_stop_active(),
             "tools_count": len(gw.exposed_tool_names()),
         }
+
+    @app.get("/readyz")
+    async def readyz() -> Response:
+        pol = getattr(gw, "policy", None)
+        pers = getattr(app.state, "setup_center_persistence", None) or getattr(gw, "_oauth_persistence", None)
+        db_ready = True
+        if pers is not None and hasattr(pers, "_db"):
+            try:
+                with pers._db() as conn:
+                    conn.execute("SELECT 1").fetchone()
+            except Exception:
+                db_ready = False
+        is_ready = bool(pol is not None and db_ready)
+        return JSONResponse(
+            status_code=200 if is_ready else 503,
+            content={
+                "status": "ready" if is_ready else "not_ready",
+                "ready": is_ready,
+                "service": "mode-b-owner-web-console",
+                "adapter_port": int(adapter_port),
+                "profile": str(getattr(pol, "profile", "unknown")) if pol is not None else "unknown",
+                "db_ready": db_ready,
+                "emergency_stop": bool(pol.is_emergency_stop_active()) if pol is not None else False,
+            },
+        )
 
     @app.get("/", response_class=HTMLResponse)
     @app.get("/console", response_class=HTMLResponse)
@@ -3142,7 +3193,14 @@ def create_web_console_app(
         if gw and hasattr(gw, "policy") and getattr(gw.policy, "emergency_stop_file", None):
             emergency_file = Path(gw.policy.emergency_stop_file)
         else:
-            emergency_file = Path(__file__).resolve().parent.parent / "runtime" / "EMERGENCY_STOP"
+            env_estop = os.getenv("MCP_EMERGENCY_STOP_FILE") or os.getenv("WINDOWS_MCP_EMERGENCY_STOP_FILE")
+            state_root = os.getenv("MCP_STATE_ROOT")
+            if env_estop:
+                emergency_file = Path(env_estop)
+            elif state_root:
+                emergency_file = Path(state_root) / "EMERGENCY_STOP"
+            else:
+                emergency_file = Path(__file__).resolve().parent.parent / "runtime" / "EMERGENCY_STOP"
         emergency_file.parent.mkdir(parents=True, exist_ok=True)
         emergency_file.write_text(f"EMERGENCY STOP at {time.time()}\n", encoding="utf-8")
 
@@ -3173,6 +3231,83 @@ def create_web_console_app(
                 "cancelled_tasks_count": cancelled_count,
             },
         )
+
+    from setup_center import register_setup_center_routes  # noqa: E402
+
+    def _create_handoff_web_session(
+        client_ip: str = "127.0.0.1",
+        existing_cookie: str | None = None,
+    ) -> tuple[WebConsoleAuthSession, bool]:
+        now = time.time()
+        loopback_hosts = {"127.0.0.1", "::1", "localhost", "testclient"}
+        # Verify existing cookie BEFORE acquiring non-reentrant `lock` (_verify_cookie_token acquires `lock`).
+        verified_existing_ws = _verify_cookie_token(existing_cookie) if existing_cookie else None
+        with lock:
+            active_s = {sid: s for sid, s in web_sessions.items() if s.is_valid(now=now)}
+            web_sessions.clear()
+            web_sessions.update(active_s)
+
+            # A1 Fix: Reuse & extend an existing valid loopback web session (preserving its csrf_token
+            # across all open browser tabs) instead of rotating the cookie and triggering 403 CSRF mismatch.
+            if verified_existing_ws is not None and verified_existing_ws.web_session_id in web_sessions:
+                existing_ws = web_sessions[verified_existing_ws.web_session_id]
+                if existing_ws.is_valid(now=now):
+                    existing_ws.expires_at = now + session_cookie_ttl_seconds
+                    return existing_ws, trust_proxy
+            if str(client_ip or "").strip().lower() in loopback_hosts and web_sessions:
+                loopback_candidates = [
+                    s
+                    for s in web_sessions.values()
+                    if s.is_valid(now=now) and str(s.client_ip or "").strip().lower() in loopback_hosts
+                ]
+                if loopback_candidates:
+                    reused = max(loopback_candidates, key=lambda s: s.created_at)
+                    reused.expires_at = now + session_cookie_ttl_seconds
+                    return reused, trust_proxy
+
+            if len(web_sessions) >= max_concurrent_sessions:
+                oldest_sid = min(web_sessions.keys(), key=lambda k: web_sessions[k].created_at)
+                web_sessions[oldest_sid].revoked = True
+                web_sessions.pop(oldest_sid, None)
+
+            web_session_id = f"wsess_{uuid.uuid4().hex}"
+            cookie_token = _sign_session_id(web_session_id)
+            csrf_token = secrets.token_urlsafe(32)
+            ws = WebConsoleAuthSession(
+                web_session_id=web_session_id,
+                cookie_token=cookie_token,
+                csrf_token=csrf_token,
+                created_at=now,
+                expires_at=now + session_cookie_ttl_seconds,
+                client_ip=client_ip,
+            )
+            web_sessions[web_session_id] = ws
+        return ws, trust_proxy
+
+    def _verify_host_and_origin_guard(request: Request) -> JSONResponse | None:
+        ok_host, host_reason = _verify_request_host(request, hosts_allowlist)
+        if not ok_host:
+            return JSONResponse(status_code=403, content={"ok": False, "error": host_reason})
+        ok_origin, origin_reason = _verify_loopback_origin(request, hosts_allowlist, origins_allowlist)
+        if not ok_origin:
+            return JSONResponse(status_code=403, content={"ok": False, "error": origin_reason})
+        return None
+
+    register_setup_center_routes(
+        app,
+        gw=gw,
+        authenticate_request=_authenticate_request,
+        create_handoff_web_session=_create_handoff_web_session,
+        verify_host_and_origin=_verify_host_and_origin_guard,
+        session_cookie_name=SESSION_COOKIE_NAME,
+        session_cookie_ttl_seconds=session_cookie_ttl_seconds,
+        oauth_persistence=oauth_persistence,
+        oauth_signing_key=oauth_signing_key,
+        owner_admin_token=owner_admin_token,
+        db_path=db_path,
+        adapter_port=adapter_port,
+        setup_action_hooks=setup_action_hooks,
+    )
 
     return app
 

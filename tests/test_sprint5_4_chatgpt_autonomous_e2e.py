@@ -871,18 +871,24 @@ class Test03_LiveAIRequirementAndHonesty:
 class Test04_AccountMigrationAndCredentialIsolation:
     """Verify Connect-ChatGPTAccount.ps1 and multi-account credential isolation."""
 
-    def test_10_powershell_migration_dryrun_verification(self):
+    def test_10_powershell_migration_dryrun_verification(self, tmp_path: Path):
         """Verify scripts/Connect-ChatGPTAccount.ps1 -Simulated -DryRun succeeds and emits report."""
         script_path = PROJECT_ROOT / "scripts" / "Connect-ChatGPTAccount.ps1"
         assert script_path.exists(), f"Missing script {script_path}"
 
+        target_root = tmp_path / "migration_dryrun_target"
+        (target_root / "runtime" / "logs").mkdir(parents=True, exist_ok=True)
+
         res = subprocess.run(
             [
                 "powershell.exe",
+                "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-File",
                 str(script_path),
+                "-TargetRoot",
+                str(target_root),
                 "-Simulated",
                 "-DryRun",
             ],
@@ -895,7 +901,7 @@ class Test04_AccountMigrationAndCredentialIsolation:
         assert "LiveProfileUntouched: True" in res.stdout
 
         # Verify generated JSON report
-        report_path = PROJECT_ROOT / "runtime" / "logs" / "account-migration-report.json"
+        report_path = target_root / "runtime" / "logs" / "account-migration-report.json"
         assert report_path.exists(), "account-migration-report.json not generated"
         report = json.loads(report_path.read_text(encoding="utf-8"))
         assert report["overall_status"] == "PASS"

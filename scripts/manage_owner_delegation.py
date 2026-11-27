@@ -713,6 +713,100 @@ def cmd_revoke_delegation(args: argparse.Namespace) -> int:
     return 0 if revoked_any else 1
 
 
+def cmd_revoke_installed_owner(args: argparse.Namespace) -> int:
+    """Local-only revocation of the existing installed owner bundle."""
+    try:
+        db_path = Path(args.oauth_db).resolve()
+        bundle_path = Path(args.bundle_file).resolve()
+        if not db_path.is_file() or not bundle_path.is_file():
+            raise ValueError("Installed database or owner bundle missing")
+        if Path(args.tasks_db).resolve() != db_path:
+            raise ValueError("Installed revocation requires a single active database")
+        bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+        if not isinstance(bundle, dict):
+            raise ValueError("Invalid installed owner bundle")
+        store = _SQLiteOAuthPersistence(db_path)
+        try:
+            store.revoke_installed_owner_access(
+                client_id=bundle["client_id"], owner_id=bundle["owner_id"],
+                delegation_id=bundle["delegation_id"],
+                grant_id=bundle["capability_grant_id"],
+                token_jti=bundle["oauth_token_jti"], expires_at=float(bundle["expires_at"]),
+            )
+        finally:
+            store.close()
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+        print("INSTALLED_OWNER_REVOKE_FAILED: local records missing or inconsistent.", file=sys.stderr)
+        return 1
+    print("INSTALLED_OWNER_BUNDLE_REVOKED: linked token and grants revoked.")
+    print("Other credentials, service profile, and already running operations are not changed.")
+    return 0
+
+
+def cmd_check_installed_owner(args: argparse.Namespace) -> int:
+    """Fail closed on missing, inconsistent, expired or revoked bundle state.
+
+    Read only; never issue or renew credentials. This is not remote pairing
+    verification or proof of a currently authorized session.
+    """
+    try:
+        db = Path(args.oauth_db).resolve()
+        path = Path(args.bundle_file).resolve()
+        if not db.is_file() or not path.is_file():
+            raise ValueError("Missing local records")
+        if Path(args.tasks_db).resolve() != db:
+            raise ValueError("Expected one installed database")
+        bundle = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(bundle, dict):
+            raise ValueError("Invalid bundle")
+        owner = bundle["owner_id"]
+        client = bundle["client_id"]
+        delegation_id = bundle["delegation_id"]
+        grant_id = bundle["capability_grant_id"]
+        jti = bundle["oauth_token_jti"]
+        token = bundle["access_token"]
+        if not all(isinstance(v, str) and v.strip() for v in
+                   (owner, client, delegation_id, grant_id, jti, token)):
+            raise ValueError("Incomplete bundle")
+        now = time.time()
+        if not float(bundle["expires_at"]) > now:
+            print("OWNER_BUNDLE_EXPIRED")
+            return 1
+        conn = sqlite3.connect(db.as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            conn.execute("BEGIN")
+            delegation = conn.execute(
+                "SELECT client_id, owner_id, revoked, expires_at "
+                "FROM owner_durable_delegations WHERE delegation_id = ?",
+                (delegation_id,),
+            ).fetchone()
+            grant = conn.execute(
+                "SELECT client_id, owner_id, delegation_id, oauth_token_jti, revoked "
+                "FROM owner_capability_grants WHERE grant_id = ?", (grant_id,),
+            ).fetchone()
+            revoked = conn.execute(
+                "SELECT 1 FROM oauth_revocations WHERE token_id IN (?, ?) "
+                "AND expires_at >= ?", (jti, token, now),
+            ).fetchone()
+        finally:
+            conn.close()
+        if (delegation is None or grant is None
+                or delegation[:2] != (client, owner)
+                or grant[:4] != (client, owner, delegation_id, jti)):
+            raise ValueError("Inconsistent bundle records")
+        if revoked or delegation[2] or grant[4]:
+            print("OWNER_BUNDLE_REVOKED")
+            return 1
+        if not float(delegation[3]) > now:
+            print("OWNER_BUNDLE_EXPIRED")
+            return 1
+    except (OSError, ValueError, KeyError, TypeError, OverflowError, sqlite3.Error):
+        print("OWNER_BUNDLE_UNVERIFIED")
+        return 1
+    print("OWNER_BUNDLE_LOCAL_RECORDS_NOT_REVOKED")
+    return 0
+
+
 def cmd_rehearse_rollback(args: argparse.Namespace) -> int:
     """Execute deterministic staging rollback rehearsal (Workstream C2) without git checkout."""
     from fastapi.testclient import TestClient
@@ -977,10 +1071,8 @@ def cmd_cutover(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
 
-    # 3. Activate Owner OAuth Bearer on the autonomous tunnel key file (backed up in DPAPI above)
-    tunnel_bearer_file = Path.home() / ".codex-chatgpt-web" / "secrets" / "autonomous-mcp-bearer.key"
-    if tunnel_bearer_file.parent.exists():
-        tunnel_bearer_file.write_text(f"Bearer {access_token}\n", encoding="utf-8")
+    # 3. P0-8 Security Fix: NEVER write an owner OAuth access_token into the shared autonomous-mcp-bearer.key file.
+    # The tunnel bearer file is shared transport authentication only and must never carry owner privileges.
 
     # 4. Dynamically stop port 8768 adapter and autonomous_tunnel so watchdog restarts both cleanly
     old_8768_pid = _find_listening_pid_for_port(8768)
@@ -1044,6 +1136,161 @@ def cmd_cutover(args: argparse.Namespace) -> int:
     return 0 if cutover_report["status"] == "PASS" else 1
 
 
+def _resolve_target_db(args: argparse.Namespace) -> Path:
+    return Path(getattr(args, "oauth_db", None) or (PROJECT_ROOT / "runtime" / "oauth_state.db"))
+
+
+def _resolve_signing_key(args: argparse.Namespace, db_path: Path) -> str:
+    key_file = getattr(args, "signing_key_file", None)
+    return load_oauth_signing_key(
+        key_path=Path(key_file) if key_file else None,
+        db_path=db_path,
+    )
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    db_path = _resolve_target_db(args)
+    signing_key = _resolve_signing_key(args, db_path)
+    persistence = _SQLiteOAuthPersistence(db_path)
+    cg = persistence.get_chatgpt_connection_state()
+    dels = persistence.list_active_owner_delegations(secret=signing_key)
+    grants_cnt = persistence.count_active_owner_grants()
+    pending = persistence.list_owner_pairing_challenges(status="PENDING")
+    has_owner = bool(len(dels) > 0 or grants_cnt > 0)
+    top_del = dels[0] if dels else None
+    snapshot = {
+        "ok": True,
+        "db_path": str(db_path),
+        "state": "OWNER_VERIFIED" if has_owner else ("CHATGPT_CONNECTED" if cg.get("verified_read_tool_call") else "LOCAL_READY"),
+        "chatgpt_connection": cg,
+        "owner_identity": {
+            "verified": has_owner,
+            "owner_id": "local_owner" if has_owner else None,
+            "client_id": top_del["client_id"] if top_del else None,
+            "active_delegation_id": top_del["delegation_id"] if top_del else None,
+            "active_delegations_count": len(dels),
+            "active_grants_count": grants_cnt,
+            "pending_challenges_count": len(pending),
+            "remaining_seconds": top_del["remaining_seconds"] if top_del else 0,
+        },
+        "active_delegations": dels,
+        "pending_challenges": pending,
+    }
+    print(json.dumps(snapshot, indent=2))
+    return 0
+
+
+def cmd_list_challenges(args: argparse.Namespace) -> int:
+    db_path = _resolve_target_db(args)
+    persistence = _SQLiteOAuthPersistence(db_path)
+    challenges = persistence.list_owner_pairing_challenges(status=args.status)
+    print(json.dumps({"ok": True, "challenges": challenges, "count": len(challenges)}, indent=2))
+    return 0
+
+
+def cmd_latest_pending_challenge(args: argparse.Namespace) -> int:
+    db_path = _resolve_target_db(args)
+    persistence = _SQLiteOAuthPersistence(db_path)
+    pending = persistence.list_owner_pairing_challenges(status="PENDING", limit=5)
+    if not pending:
+        print(json.dumps({"ok": False, "error": "no_pending_challenge"}))
+        return 1
+    print(json.dumps({"ok": True, "challenge": pending[0]}))
+    return 0
+
+
+def cmd_approve_challenge(args: argparse.Namespace) -> int:
+    db_path = _resolve_target_db(args)
+    signing_key = _resolve_signing_key(args, db_path)
+    persistence = _SQLiteOAuthPersistence(db_path)
+    try:
+        res = persistence.approve_owner_pairing_challenge(
+            args.challenge_id,
+            secret=signing_key,
+            approved_permission_level=args.level,
+            approved_workspaces=args.allowed_paths if args.allowed_paths else None,
+            approved_ttl_seconds=args.delegation_ttl,
+            allow_destructive=bool(args.include_release_deploy) if args.include_release_deploy else None,
+            total_operation_budget=int(args.total_budget),
+        )
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+        return 1
+
+    if getattr(args, "token_out", None):
+        client_id = str(res["client_id"])
+        grant_rec = persistence.get_owner_capability_grant(str(res["capability_grant_id"])) or {}
+        del_rec = persistence.get_owner_durable_delegation(str(res["delegation_id"])) or {}
+        tok_info = _issue_oauth_token(
+            client_id=client_id,
+            secret=signing_key,
+            scope="mcp:autonomous mcp:owner mcp:coding:write",
+            ttl_seconds=3600,
+            owner_id="local_owner",
+            resource="http://127.0.0.1:8768/mcp",
+            issuer="windows-mcp-gateway-autonomous-adapter",
+            typ="access",
+        )
+        ok_v, verified_p, _ = _verify_oauth_token(
+            tok_info["access_token"],
+            signing_key,
+            set(),
+            persistence=persistence,
+            expected_owner_id="local_owner",
+        )
+        token_jti = str((verified_p or {}).get("jti") or grant_rec.get("oauth_token_jti") or "")
+        if ok_v and token_jti:
+            persistence.rebind_active_owner_grant_on_refresh(
+                secret=signing_key,
+                owner_id="local_owner",
+                client_id=client_id,
+                new_oauth_token_jti=token_jti,
+            )
+        bundle_payload = {
+            "status": "PROVISIONED",
+            "db_path": str(db_path),
+            "client_id": client_id,
+            "owner_id": "local_owner",
+            "scope": "mcp:autonomous mcp:owner mcp:coding:write",
+            "access_token": tok_info["access_token"],
+            "oauth_token_jti": token_jti,
+            "capability_grant_id": str(res["capability_grant_id"]),
+            "delegation_id": str(res["delegation_id"]),
+            "challenge_id": str(args.challenge_id),
+            "allowed_tools": del_rec.get("allowed_tools_list", []),
+            "allowed_paths": del_rec.get("allowed_paths_list", []),
+            "expires_at": float((verified_p or {}).get("exp", time.time() + 3600)),
+            "grant_expires_at": float(grant_rec.get("expires_at", time.time() + 900)),
+            "delegation_expires_at": float(del_rec.get("expires_at", time.time() + 28800)),
+            "total_operation_budget": int(del_rec.get("total_operation_budget", 5000)),
+            "allow_destructive_operations": bool(del_rec.get("allow_destructive_operations", False)),
+            "max_uses": int(grant_rec.get("max_uses", 100)),
+        }
+        out_p = Path(args.token_out)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        out_p.write_text(json.dumps(bundle_payload, indent=2), encoding="utf-8")
+
+    print(json.dumps(res, indent=2))
+    return 0
+
+
+def cmd_deny_challenge(args: argparse.Namespace) -> int:
+    db_path = _resolve_target_db(args)
+    signing_key = _resolve_signing_key(args, db_path)
+    persistence = _SQLiteOAuthPersistence(db_path)
+    try:
+        res = persistence.deny_owner_pairing_challenge(
+            args.challenge_id,
+            secret=signing_key,
+            reason=args.reason or "denied_by_owner_cli",
+        )
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+        return 1
+    print(json.dumps(res, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage WinOwner MCP Owner Delegation, Backup, Rollback & Cutover")
     parser.add_argument(
@@ -1103,6 +1350,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_rev_del = sub.add_parser("revoke-delegation", help="Revoke an owner durable delegation by delegation_id")
     p_rev_del.add_argument("--delegation-id", required=True)
 
+    p_rev_installed = sub.add_parser("revoke-installed-owner", help="Revoke the existing local installed owner bundle")
+    p_rev_installed.add_argument("--bundle-file", required=True)
+
+    p_check_installed = sub.add_parser("check-installed-owner", help="Inspect local owner bundle revocation status without changing state")
+    p_check_installed.add_argument("--bundle-file", required=True)
+
     sub.add_parser("rehearse-rollback", help="Run isolated staging rollback rehearsal without git checkout (C2)")
 
     p_cut = sub.add_parser("cutover", help="Execute guarded production cutover for port 8768 (D1/D2)")
@@ -1112,6 +1365,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_cut.add_argument("--delegation-ttl", type=float, default=28800.0)
     p_cut.add_argument("--total-budget", type=int, default=5000)
     p_cut.add_argument("--max-uses", type=int, default=50)
+
+    p_st = sub.add_parser("status", help="Show unified effective owner authorization & pairing status")
+    p_st.add_argument("--json", action="store_true")
+
+    p_lc = sub.add_parser("list-challenges", help="List owner pairing challenges")
+    p_lc.add_argument("--status", default=None)
+    p_lc.add_argument("--json", action="store_true")
+
+    p_lpc = sub.add_parser("latest-pending-challenge", help="Get the most recent pending owner pairing challenge")
+    p_lpc.add_argument("--json", action="store_true")
+
+    p_ac = sub.add_parser("approve-challenge", help="Approve a pending verifiable owner pairing challenge")
+    p_ac.add_argument("--challenge-id", required=True)
+    p_ac.add_argument("--level", default=None)
+    p_ac.add_argument("--allowed-paths", nargs="*", default=None)
+    p_ac.add_argument("--delegation-ttl", type=float, default=None)
+    p_ac.add_argument("--total-budget", type=int, default=5000)
+    p_ac.add_argument("--include-release-deploy", action="store_true")
+    p_ac.add_argument("--token-out", default=None)
+
+    p_dc = sub.add_parser("deny-challenge", help="Deny a pending verifiable owner pairing challenge")
+    p_dc.add_argument("--challenge-id", required=True)
+    p_dc.add_argument("--reason", default="denied_by_owner_cli")
 
     return parser
 
@@ -1129,10 +1405,24 @@ def main() -> int:
         return cmd_revoke_grant(args)
     if args.command == "revoke-delegation":
         return cmd_revoke_delegation(args)
+    if args.command == "revoke-installed-owner":
+        return cmd_revoke_installed_owner(args)
+    if args.command == "check-installed-owner":
+        return cmd_check_installed_owner(args)
     if args.command == "rehearse-rollback":
         return cmd_rehearse_rollback(args)
     if args.command == "cutover":
         return cmd_cutover(args)
+    if args.command == "status":
+        return cmd_status(args)
+    if args.command == "list-challenges":
+        return cmd_list_challenges(args)
+    if args.command == "latest-pending-challenge":
+        return cmd_latest_pending_challenge(args)
+    if args.command == "approve-challenge":
+        return cmd_approve_challenge(args)
+    if args.command == "deny-challenge":
+        return cmd_deny_challenge(args)
     return 1
 
 

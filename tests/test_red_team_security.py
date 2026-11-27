@@ -30,9 +30,11 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -42,6 +44,7 @@ from pathlib import Path
 from typing import Any
 
 import psutil
+import uvicorn
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 for _d in (PROJECT_ROOT / "mcp-gateway", PROJECT_ROOT / "backend", PROJECT_ROOT / "desktop-agent"):
@@ -56,6 +59,7 @@ from policy import (  # noqa: E402
     redact_secrets,
 )
 from gateway_server import ALL_TOOL_DEFINITIONS, MCPGatewayServer  # noqa: E402
+from http_server import create_gateway_http_app  # noqa: E402
 from file_code_ops import FileCodeOperations  # noqa: E402
 from exec_jobs import ExecutionJobManager  # noqa: E402
 from agent import (  # noqa: E402
@@ -68,7 +72,10 @@ MCP_BRIDGE_URL = "http://127.0.0.1:8765/mcp"
 BACKEND_BASE_URL = "http://127.0.0.1:3080"
 NGROK_API_URL = "http://127.0.0.1:4040/api/tunnels"
 ROLLBACK_SCRIPT_PATH = PROJECT_ROOT / "scripts" / "Rollback-WindowsMcp.ps1"
-EVIDENCE_PATH = PROJECT_ROOT / "runtime" / "evidence" / "stage8_red_team_qa.json"
+EVIDENCE_PATH = Path(
+    os.environ.get("WINOWNER_RED_TEAM_EVIDENCE_PATH")
+    or (Path(tempfile.gettempdir()) / "winowner_stage8_red_team_qa.json")
+)
 
 _TK_SENSITIVE_WINDOW_SCRIPT = """
 import sys
@@ -114,9 +121,10 @@ def _call_mcp_http(
     method: str,
     params: dict[str, Any] | None = None,
     req_id: int = 1,
-    url: str = MCP_BRIDGE_URL,
+    url: str | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
+    target_url = url or MCP_BRIDGE_URL
     payload = {
         "jsonrpc": "2.0",
         "id": req_id,
@@ -124,7 +132,7 @@ def _call_mcp_http(
         "params": params if params is not None else {},
     }
     req = urllib.request.Request(
-        url,
+        target_url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
@@ -148,6 +156,71 @@ def _call_mcp_http(
 
 class TestRedTeamSecurity(unittest.TestCase):
     """20 Mandatory Adversarial Red-Team Security Tests (Section 11)."""
+
+    _http_tmp: tempfile.TemporaryDirectory[str] | None = None
+    _http_server: uvicorn.Server | None = None
+    _http_thread: threading.Thread | None = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        global MCP_BRIDGE_URL, BACKEND_BASE_URL
+        if os.environ.get("WINOWNER_LIVE_PROD_PORTS") == "1":
+            return
+
+        cls._http_tmp = tempfile.TemporaryDirectory(prefix="redteam_isolated_http_")
+        base = Path(cls._http_tmp.name).resolve()
+        pol = SecurityPolicy(
+            policy_path=PROJECT_ROOT / "config" / "policy.example.json",
+            profile="read_only",
+            allowed_read_roots=[str(PROJECT_ROOT), str(base)],
+            allowed_git_repos=[str(PROJECT_ROOT)],
+            audit_log_path=base / "redteam_http_audit.jsonl",
+        )
+        gw = MCPGatewayServer(policy=pol)
+        gw.server_version = "0.2.1"
+        expected_token = "test_isolated_redteam_token_1234567890"
+        app = create_gateway_http_app(
+            gateway=gw,
+            caller_auth_token=expected_token,
+            require_autonomous_auth=True,
+            db_path=base / "redteam_oauth.db",
+        )
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            port = int(s.getsockname()[1])
+
+        cls._http_server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+        cls._http_thread = threading.Thread(target=cls._http_server.run, daemon=True)
+        cls._http_thread.start()
+
+        BACKEND_BASE_URL = f"http://127.0.0.1:{port}"
+        MCP_BRIDGE_URL = f"http://127.0.0.1:{port}/mcp"
+
+        ready = False
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(f"{BACKEND_BASE_URL}/health", timeout=1.0) as resp:
+                    if resp.status == 200:
+                        ready = True
+                        break
+            except Exception:
+                time.sleep(0.05)
+        if not ready:
+            raise RuntimeError(f"Isolated red-team HTTP server did not become ready at {BACKEND_BASE_URL}/health")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if cls._http_server is not None:
+            cls._http_server.should_exit = True
+        if cls._http_thread is not None:
+            cls._http_thread.join(timeout=5.0)
+        cls._http_server = None
+        cls._http_thread = None
+        if cls._http_tmp is not None:
+            cls._http_tmp.cleanup()
+            cls._http_tmp = None
 
     def setUp(self) -> None:
         self.tmp_dir = tempfile.TemporaryDirectory()
@@ -1107,60 +1180,85 @@ class TestRedTeamSecurity(unittest.TestCase):
             health_status = h_resp.status
         self.assertEqual(health_status, 200)
 
-        # 2. Verify POST /api/tools/path_exists with NO Authorization header returns 401 or 403
-        body = json.dumps({"path": str(PROJECT_ROOT)}).encode("utf-8")
-        no_auth_req = urllib.request.Request(
-            f"{BACKEND_BASE_URL}/api/tools/path_exists",
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        no_auth_status = 200
-        try:
-            with urllib.request.urlopen(no_auth_req, timeout=5.0) as resp:
-                no_auth_status = resp.status
-        except urllib.error.HTTPError as err:
-            no_auth_status = err.code
+        if os.environ.get("WINOWNER_LIVE_PROD_PORTS") == "1":
+            protected_targets: list[tuple[str, bytes]] = [
+                ("/api/tools/path_exists", json.dumps({"path": str(PROJECT_ROOT)}).encode("utf-8")),
+            ]
+        else:
+            # Probe real production protected endpoints on create_gateway_http_app:
+            # - POST /api/sessions (_require_owner_auth)
+            # - POST /mcp/autonomous (_authenticate_autonomous_caller)
+            protected_targets = [
+                ("/api/sessions", json.dumps({"tiers": ["write"], "ttl_seconds": 60}).encode("utf-8")),
+                (
+                    "/mcp/autonomous",
+                    json.dumps(
+                        {"jsonrpc": "2.0", "id": 170, "method": "tools/list", "params": {}}
+                    ).encode("utf-8"),
+                ),
+            ]
 
-        self.assertIn(
-            no_auth_status,
-            (401, 403),
-            f"Expected HTTP 401/403 for unauthenticated POST to port 3080, got {no_auth_status}",
-        )
+        probe_results: dict[str, dict[str, int]] = {}
+        for endpoint_path, body in protected_targets:
+            # 2. Verify POST with NO Authorization header returns 401 or 403
+            no_auth_req = urllib.request.Request(
+                f"{BACKEND_BASE_URL}{endpoint_path}",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            no_auth_status = 200
+            try:
+                with urllib.request.urlopen(no_auth_req, timeout=5.0) as resp:
+                    no_auth_status = resp.status
+            except urllib.error.HTTPError as err:
+                no_auth_status = err.code
 
-        # 3. Verify POST /api/tools/path_exists with forged Bearer token returns 401 or 403
-        bad_auth_req = urllib.request.Request(
-            f"{BACKEND_BASE_URL}/api/tools/path_exists",
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": "Bearer forged_token",
-            },
-            method="POST",
-        )
-        bad_auth_status = 200
-        try:
-            with urllib.request.urlopen(bad_auth_req, timeout=5.0) as resp:
-                bad_auth_status = resp.status
-        except urllib.error.HTTPError as err:
-            bad_auth_status = err.code
+            self.assertIn(
+                no_auth_status,
+                (401, 403),
+                f"Expected HTTP 401/403 for unauthenticated POST to {endpoint_path}, got {no_auth_status}",
+            )
 
-        self.assertIn(
-            bad_auth_status,
-            (401, 403),
-            f"Expected HTTP 401/403 for forged Bearer token on port 3080, got {bad_auth_status}",
-        )
+            # 3. Verify POST with forged Bearer token returns 401 or 403
+            bad_auth_req = urllib.request.Request(
+                f"{BACKEND_BASE_URL}{endpoint_path}",
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer forged_token",
+                },
+                method="POST",
+            )
+            bad_auth_status = 200
+            try:
+                with urllib.request.urlopen(bad_auth_req, timeout=5.0) as resp:
+                    bad_auth_status = resp.status
+            except urllib.error.HTTPError as err:
+                bad_auth_status = err.code
 
+            self.assertIn(
+                bad_auth_status,
+                (401, 403),
+                f"Expected HTTP 401/403 for forged Bearer token on {endpoint_path}, got {bad_auth_status}",
+            )
+            probe_results[endpoint_path] = {
+                "unauthenticated_post_http_status": no_auth_status,
+                "forged_bearer_post_http_status": bad_auth_status,
+            }
+
+        first_probe = next(iter(probe_results.values()))
         _record_evidence(
             "test_17_backend_direct_calls_without_credentials_are_denied",
-            requirement="Direct calls to http://127.0.0.1:3080/api/tools/* without credentials or with forged token return 401/403 while /health returns 200",
-            execution_origin="live_http_127.0.0.1:3080",
+            requirement="Direct calls to protected backend endpoints without credentials or with forged token return 401/403 while /health returns 200",
+            execution_origin=f"live_http_{BACKEND_BASE_URL}",
             passed=True,
             latency_ms=(time.perf_counter() - t0) * 1000,
             details={
                 "health_http_status": health_status,
-                "unauthenticated_post_http_status": no_auth_status,
-                "forged_bearer_post_http_status": bad_auth_status,
+                "unauthenticated_post_http_status": first_probe["unauthenticated_post_http_status"],
+                "forged_bearer_post_http_status": first_probe["forged_bearer_post_http_status"],
+                "endpoint_probes": probe_results,
             },
         )
 

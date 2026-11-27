@@ -1,10 +1,10 @@
-# Installation — WinOwner MCP v1.1.0 (development)
+# Installation — WinOwner MCP v1.2.0 (development)
 
 ## Beginner / one-click local setup (no Git required)
 
-Open CMD and paste the one-line installation command from [START_HERE](START_HERE.vi.md). Alternatively download and extract the ZIP, then double-click **Install-WinOwner.cmd**. The wrapper invokes the locally tested bootstrap with Windows PowerShell 5.1 and displays errors instead of silently exiting. Python 3.12 is installed through winget if available, otherwise install from python.org and rerun. The result is **LOCAL_INSTALL_PASS** with authenticated owner_full_control profile, not ChatGPT pairing.
+Use the version-specific installation instructions: [English](../README.md) | [Tiếng Việt](START_HERE.vi.md). Alternatively download and extract the ZIP, then double-click **Install-WinOwner.cmd**. The wrapper invokes the locally tested bootstrap with Windows PowerShell 5.1 and displays errors instead of silently exiting. Python 3.12 is installed through winget if available, otherwise install from python.org and rerun. The result is **LOCAL_INSTALL_PASS** with the authenticated local profile (read_only by default), not ChatGPT pairing. The one-line installer also runs local health/authentication checks automatically; a manual Check-WinOwner.cmd run is for troubleshooting or later rechecks.
 
-Follow the [short beginner guide](START_HERE.vi.md) for one-command local setup. For tunnel, Platform permissions and OAuth see the [advanced guide](ADVANCED_CHATGPT.vi.md). Prior RC3 release ZIPs do not contain the new launcher; use a newer source snapshot/release.
+Follow the [English quick start](../README.md) or [Vietnamese quick start](START_HERE.vi.md) for one-command local setup. For tunnel, Platform permissions and OAuth see the [advanced guide](ADVANCED_CHATGPT.vi.md). Prior RC3 release ZIPs do not contain the new launcher; use a newer source snapshot/release.
 
 ## Prerequisites
 
@@ -27,11 +27,11 @@ Prerequisite: Git on Windows. Paste into PowerShell:
 git clone https://github.com/phuonghuster7/winowner-mcp.git winowner-mcp; if ($LASTEXITCODE -eq 0) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\winowner-mcp\scripts\Bootstrap-WindowsMcp.ps1" }
 ```
 
-The legacy bootstrap called on its own defaults to read_only; the beginner installer calls it with -OwnerFullControl. Both create the Python 3.12 virtual environment, install dependencies and automatically generate a protected local authentication value, registers a least-privilege Task Scheduler job that runs the standalone adapter at owner logon, then tests /health and HTTP 401 without authentication. It fails closed when an unknown process uses the port or the task name is occupied; no firewall is opened. It can install Python 3.12 with winget where supported. Git itself cannot install or OAuth-pair an agent.
+Both the legacy bootstrap and the beginner installer default to read_only; Owner Full Control requires explicit opt-in. Both create the Python 3.12 virtual environment, install dependencies and automatically generate a protected local authentication value, registers a least-privilege Task Scheduler job that runs the standalone adapter at owner logon, then tests /health and HTTP 401 without authentication. It fails closed when an unknown process uses the port or the task name is occupied; no firewall is opened. It can install Python 3.12 with winget where supported. Git itself cannot install or OAuth-pair an agent.
 
 Run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Bootstrap-WindowsMcp.ps1 -DryRun` for a non-mutating check. Run with `-Remove` to stop the verified local adapter and unregister the auto-start task. Existing secrets and policies remain on disk for owner-controlled cleanup. Auto-start has been verified across separate command sessions, but a full Windows reboot remains a separate acceptance check.
 
-**LOCAL_INSTALL_PASS does NOT mean the ChatGPT connector is connected.** The operator must complete owner OAuth and private tunnel pairing using docs/CONNECT_CHATGPT.md. The installer selects owner_full_control for an authenticated owner, but privileged tools still require owner OAuth and valid delegation.
+**LOCAL_INSTALL_PASS (`LOCAL_READY`) does NOT mean the ChatGPT connector is connected.** Connect the private tunnel using **WinOwner Setup Center** (`http://127.0.0.1:8767/setup` via `Check-WinOwner.cmd -OpenSetupCenter`) or `Connect-ChatGPT.cmd`. `Authentication: None` is valid at ChatGPT plugin creation for read-only (`Read`) usage when backend tunnel auth is configured, whereas privileged `Scoped` or `Owner` tools require OAuth 2.1 verifiable client identity and one-time local challenge approval (`OWNER_VERIFIED -> OWNER_CONTROL_READY`).
 
 ## Verify installer before modifying your workstation
 
@@ -41,7 +41,7 @@ Review the output and explicitly decide which local services, scheduled tasks an
 
 ## Configure your own identity and scope
 
-Start with example files under config/. Never copy the developer's actual policy.json, trusted_workspaces.json or tunnel-autonomous runtime files. Every machine and ChatGPT account needs its own OAuth owner onboarding, locally bound endpoints, tunnel setup and access scope. One-click selects owner_full_control for verified owners; -ReadOnly is an optional restricted mode. Do not enable OWNER_GLOBAL_FILESYSTEM until identity, scope, audit, grants and revocation have been tested.
+Start with example files under config/. Never copy the developer's actual policy.json, trusted_workspaces.json or tunnel-autonomous runtime files. Every machine and ChatGPT account needs its own OAuth owner onboarding, locally bound endpoints, tunnel setup and access scope. One-click defaults to read_only; -OwnerFullControl is an explicit opt-in for authorized owners. Do not enable OWNER_GLOBAL_FILESYSTEM until identity, scope, audit, grants and revocation have been tested.
 
 ## Verify runtime
 
@@ -55,3 +55,25 @@ Run collection and a focused non-mutating subset on a **disposable** checkout:
     .\.venv\Scripts\python.exe -m pytest -q tests/test_mcp_gateway.py tests/test_owner_full_control.py tests/test_oauth_dynamic_owner.py tests/test_direct_coding_security.py
 
 No shared OAuth secret or owner delegation is supplied in this repository. For a failed connector, check owner OAuth, tunnel runtime, port binding and logs locally; redact credentials before sharing any diagnostic output.
+
+
+## Upgrade and repair checks
+
+The version-pinned command installs side by side; it does not automatically transfer
+private credentials or reauthorize ChatGPT. Keep the previous folder until both the
+new local service and your actual ChatGPT connection work. Rerunning the same
+version repairs that installation instead of overwriting configuration. A separately
+obtained trusted archive SHA-256 can be supplied as ExpectedArchiveSha256 when running
+go.ps1; a tag and HTTPS alone are not an independent integrity check.
+
+In-place updates via `scripts/Update-WindowsMcpAgent.ps1` (or **Check for Updates** in WinOwner Setup Center) strictly require verified semantic-version GitHub Release artifacts (`-ReleaseVersion vX.Y.Z` or verified `-ReleaseZipPath` + SHA-256 sums and `release-manifest.json`), reject arbitrary branch refs (`main`/`HEAD`), verify Scheduled Task ownership, and verify before/after SHA-256 preservation of local secrets, OAuth databases, and policies. Two-phase atomic rollback (`scripts/Rollback-WindowsMcp.ps1`) verifies 100% of backup file hashes before restoring and removes any newly added files. A rollback is reported as verified only after the old local service passes health and authentication checks. Remote pairing remains a separate check.
+
+## Maintainer release alignment
+
+Keep the version pinned to an explicitly reviewed release. When preparing a new release, update the installer default ref, display version, install directory, both READMEs, the beginner guide and `SECURITY.md` together. The onboarding tests check version drift and referenced documentation assets. Passing those checks is not proof that the GitHub tag exists or that a real Windows/ChatGPT connection has been accepted; verify both before publication. Do not silently download or execute unreviewed branch HEADs.
+
+### Release version gate
+
+Before preparing a release, run `python -m pytest -q tests/test_oneclick_onboarding.py`. The version pinned in `go.ps1` must match both READMEs, the beginner guide, security policy, installation guide, launcher, setup banner, package builder default and manifest-free runtime identity. Keep previous-version migration references intact.
+
+Run the same suite and `scripts/Build-ReleasePackage.ps1 -DryRun` on Windows CI. Inspect the built ZIP and both rendered READMEs, including every localized image. A green test run does not establish live ChatGPT acceptance. Publish the version tag and enable its installation instructions only after release acceptance; do not substitute a development branch URL for an unavailable release.

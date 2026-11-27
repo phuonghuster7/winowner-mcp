@@ -25,7 +25,7 @@ param(
     [string]$NewTunnelId = "",
     [string]$McpTargetUrl = "http://127.0.0.1:8765/mcp",
     [ValidateSet("Auto", "ScenarioA", "ScenarioB")][string]$Scenario = "Auto",
-    [string]$TargetRoot = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }),
+    [string]$TargetRoot = "",
     [System.Security.SecureString]$NewApiKey = $null,
     [switch]$Simulated,
     [switch]$DryRun
@@ -33,6 +33,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+if ([string]::IsNullOrWhiteSpace($TargetRoot)) {
+    $TargetRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+}
 
 # ---------------------------------------------------------------------------
 # Secret Redaction Helper

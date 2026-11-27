@@ -18,12 +18,21 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ReportPath = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "runtime\logs\diagnostic-report.json" } else { Join-Path (Get-Location).Path "runtime\logs\diagnostic-report.json" }),
-    [string]$SmokePath = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path })
+    [string]$ReportPath = "",
+    [string]$SmokePath = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+$defaultRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+if ([string]::IsNullOrWhiteSpace($SmokePath)) {
+    $SmokePath = $defaultRoot
+}
+if ([string]::IsNullOrWhiteSpace($ReportPath)) {
+    $ReportPath = Join-Path $defaultRoot "runtime\logs\diagnostic-report.json"
+}
 
 # ---------------------------------------------------------------------------
 # Secret Redaction Helper

@@ -1028,6 +1028,14 @@ class MCPGatewayServer:
         self.policy.register_subsystems(exec_ops=self.exec_ops, desktop_agent=self.desktop)
         return self.policy.reset_emergency_stop()
 
+    def switch_policy_profile(self, target_profile: str, *, reason: str = "owner_approved_profile_switch") -> str:
+        """Switch the active gateway policy profile live while preserving runtime isolation and E-Stop."""
+        if self.policy is None or not hasattr(self.policy, "switch_profile"):
+            raise RuntimeError("Active gateway policy does not support live profile switching")
+        new_prof = self.policy.switch_profile(target_profile, reason=reason)
+        self.server_version = "0.2.1" if self.policy.strict_v021_read_tools_only else "0.3.0"
+        return new_prof
+
     def exposed_tool_names(self) -> list[str]:
         """Return sorted list of tool names exposed by the current policy profile."""
         if self.policy.strict_v021_read_tools_only:
@@ -1349,7 +1357,13 @@ class MCPGatewayServer:
         """Return an owner-authorized DesktopAgent that preserves Emergency Stop, interactive session lock checks, and durable audit logging without disabling gateway policy globally."""
         if getattr(self, "desktop", None) is not None and not isinstance(self.desktop, DesktopAgent):
             return self.desktop
-        if self.policy and PermissionTier.DESKTOP in getattr(self.policy, "enabled_tiers", frozenset()):
+        if self.policy and PermissionTier.DESKTOP not in getattr(self.policy, "enabled_tiers", frozenset()):
+            raise PermissionError("Permission Denied (P0-4): DESKTOP tier is not enabled in the active server policy profile")
+        if (
+            self.policy
+            and not getattr(self.policy, "require_session_for_privileged", True)
+            and not self.policy.tier_require_approval_token.get(PermissionTier.DESKTOP, False)
+        ):
             return self.desktop
         if not hasattr(self, "_owner_desktop_agent") or self._owner_desktop_agent is None:
             rp = getattr(self, "runtime_paths", None)
@@ -1374,6 +1388,8 @@ class MCPGatewayServer:
                 policy=owner_pol,
                 emergency_stop_file=stop_file,
             )
+            if self.policy:
+                self.policy.register_subsystems(desktop_agent=self._owner_desktop_agent)
         return self._owner_desktop_agent
 
     def _log_owner_cloud_audit(
@@ -1456,6 +1472,137 @@ class MCPGatewayServer:
                 arguments=tool_args,
             )
             return False, msg, {}
+
+        # P0-4 Fix: Enforce active server policy profile and enabled tiers before owner tool execution
+        if self.policy is not None:
+            active_prof = str(getattr(self.policy, "profile", "read_only"))
+            enabled_tiers = getattr(self.policy, "enabled_tiers", frozenset()) or frozenset()
+            if active_prof == "read_only":
+                msg = f"Permission Denied (P0-4): Tool '{tool_name}' is not permitted under read_only policy profile"
+                self._log_owner_cloud_audit(
+                    tool_name=tool_name,
+                    tier=tier_label,
+                    decision="DENY",
+                    reason=msg,
+                    caller_id=caller_id,
+                    arguments=tool_args,
+                )
+                return False, msg, {}
+            if tool_name == "agent_powershell_execute":
+                if PermissionTier.EXECUTE not in enabled_tiers:
+                    msg = "Permission Denied (P0-4): EXECUTE tier is not enabled in the active server policy profile"
+                    self._log_owner_cloud_audit(
+                        tool_name=tool_name,
+                        tier=tier_label,
+                        decision="DENY",
+                        reason=msg,
+                        caller_id=caller_id,
+                        arguments=tool_args,
+                    )
+                    return False, msg, {}
+                cmd_text = str(tool_args.get("command") or "")
+                for rx in getattr(self.policy, "blocked_command_regexes", ()):
+                    if rx.search(cmd_text):
+                        msg = "Permission Denied (P0-4): PowerShell command matches a blocked policy pattern"
+                        self._log_owner_cloud_audit(
+                            tool_name=tool_name,
+                            tier=tier_label,
+                            decision="DENY",
+                            reason=msg,
+                            caller_id=caller_id,
+                            arguments=tool_args,
+                        )
+                        return False, msg, {}
+            elif tool_name in OWNER_EXEC_AND_DESKTOP_TOOLS and tool_name != "agent_system_status":
+                if PermissionTier.DESKTOP not in enabled_tiers:
+                    msg = "Permission Denied (P0-4): DESKTOP tier is not enabled in the active server policy profile"
+                    self._log_owner_cloud_audit(
+                        tool_name=tool_name,
+                        tier=tier_label,
+                        decision="DENY",
+                        reason=msg,
+                        caller_id=caller_id,
+                        arguments=tool_args,
+                    )
+                    return False, msg, {}
+
+        # P0-6 Fix: Validate ALL path arguments for sensitive files, raw secrets, UNC/ADS, and symlinks/reparse points
+        candidate_paths: list[tuple[str, str]] = []
+        for path_key in ("cwd", "save_path", "verify_path", "path", "workspace_root"):
+            raw_val = tool_args.get(path_key)
+            if isinstance(raw_val, str) and raw_val.strip():
+                candidate_paths.append((path_key, raw_val.strip()))
+        if tool_name == "agent_launch_app":
+            raw_app = str(tool_args.get("app_path") or "").strip()
+            if raw_app and ("/" in raw_app or "\\" in raw_app or ":" in raw_app or ".." in raw_app):
+                candidate_paths.append(("app_path", raw_app))
+
+        from runtime.coding_tools import _has_reparse_point_or_symlink, _is_sensitive_path
+        _raw_secret_names = {
+            "oauth_signing.key",
+            "owner_admin.key",
+            "gateway_caller.token",
+            "autonomous-mcp-bearer.key",
+            "owner_delegation_bundle.json",
+            "emergency_stop",
+        }
+        _raw_secret_exts = {".db", ".sqlite", ".sqlite3", ".dpapi", ".key", ".pem", ".pfx"}
+        for arg_key, raw_p in candidate_paths:
+            if "\x00" in raw_p or raw_p.startswith(("\\\\", "//")):
+                msg = f"Permission Denied (P0-6): Invalid or UNC path in '{arg_key}'"
+                self._log_owner_cloud_audit(
+                    tool_name=tool_name,
+                    tier=tier_label,
+                    decision="DENY",
+                    reason=msg,
+                    caller_id=caller_id,
+                    arguments=tool_args,
+                )
+                return False, msg, {}
+            p_obj = Path(raw_p)
+            tail_drive = str(p_obj)[len(p_obj.drive):]
+            if ":" in tail_drive:
+                msg = f"Permission Denied (P0-6): Alternate data stream path is denied in '{arg_key}'"
+                self._log_owner_cloud_audit(
+                    tool_name=tool_name,
+                    tier=tier_label,
+                    decision="DENY",
+                    reason=msg,
+                    caller_id=caller_id,
+                    arguments=tool_args,
+                )
+                return False, msg, {}
+            try:
+                resolved_p = p_obj.resolve()
+            except Exception:
+                resolved_p = p_obj
+            if _has_reparse_point_or_symlink(p_obj) or _has_reparse_point_or_symlink(resolved_p):
+                msg = f"Permission Denied (P0-6): Symlink or reparse point path is denied in '{arg_key}'"
+                self._log_owner_cloud_audit(
+                    tool_name=tool_name,
+                    tier=tier_label,
+                    decision="DENY",
+                    reason=msg,
+                    caller_id=caller_id,
+                    arguments=tool_args,
+                )
+                return False, msg, {}
+            if (
+                resolved_p.name.casefold() in _raw_secret_names
+                or resolved_p.suffix.casefold() in _raw_secret_exts
+                or _is_sensitive_path(resolved_p)
+                or (self.policy is not None and self.policy.is_sensitive_path_str(resolved_p, check_content=False))
+            ):
+                msg = f"Permission Denied (P0-6): Sensitive or security-control path is denied in '{arg_key}'"
+                self._log_owner_cloud_audit(
+                    tool_name=tool_name,
+                    tier=tier_label,
+                    decision="DENY",
+                    reason=msg,
+                    caller_id=caller_id,
+                    arguments=tool_args,
+                )
+                return False, msg, {}
 
         persistence = getattr(self, "_oauth_persistence", None)
         signing_key = getattr(self, "_oauth_signing_key", None)
@@ -1592,18 +1739,64 @@ class MCPGatewayServer:
                 )
                 return False, msg, {}
 
-            target_path = (
-                tool_args.get("cwd")
-                or tool_args.get("save_path")
-                or tool_args.get("verify_path")
-                or tool_args.get("path")
-                or tool_args.get("workspace_root")
-            )
+            # P0-6 Fix: Validate every path argument against grant allowed_paths.
+            # When agent_powershell_execute omits cwd, resolve effective_cwd strictly inside the grant's allowed_paths
+            # (never silently defaulting to PROJECT_ROOT outside grant scope).
+            grant_check_paths = [raw_p for _k, raw_p in candidate_paths]
+            resolved_effective_cwd: str | None = str(tool_args.get("cwd") or "").strip() or None
+            if tool_name == "agent_powershell_execute" and not resolved_effective_cwd:
+                g_rec_preview = (
+                    persistence.get_owner_capability_grant(arg_grant_id)
+                    if hasattr(persistence, "get_owner_capability_grant")
+                    else None
+                )
+                g_paths = (g_rec_preview or {}).get("allowed_paths_list") or []
+                for ap in g_paths:
+                    ap_s = str(ap).strip()
+                    if ap_s.upper() in ("*", "AUTO"):
+                        resolved_effective_cwd = str(PROJECT_ROOT)
+                        break
+                    try:
+                        ap_p = Path(ap_s).resolve()
+                        if ap_p.is_dir() and not _has_reparse_point_or_symlink(ap_p):
+                            resolved_effective_cwd = str(ap_p)
+                            break
+                    except Exception:
+                        continue
+                if not resolved_effective_cwd:
+                    resolved_effective_cwd = str(PROJECT_ROOT)
+                grant_check_paths.append(resolved_effective_cwd)
+
+            for extra_p in grant_check_paths[1:]:
+                ok_extra, err_extra, _ = persistence.validate_and_consume_owner_grant(
+                    grant_id=arg_grant_id,
+                    secret=str(signing_key),
+                    tool_name=tool_name,
+                    target_path=str(extra_p),
+                    expected_owner_id="local_owner",
+                    expected_client_id=verified_client_id,
+                    oauth_token_jti=verified_jti,
+                    consume=False,
+                    require_client_and_jti=True,
+                )
+                if not ok_extra:
+                    msg = f"Permission Denied (B2/B3/P0-6): {err_extra}"
+                    self._log_owner_cloud_audit(
+                        tool_name=tool_name,
+                        tier=tier_label,
+                        decision="DENY",
+                        reason=msg,
+                        caller_id=caller_id,
+                        arguments=tool_args,
+                    )
+                    return False, msg, {}
+
+            primary_target_path = grant_check_paths[0] if grant_check_paths else None
             ok_g, err_g, grant_rec = persistence.validate_and_consume_owner_grant(
                 grant_id=arg_grant_id,
                 secret=str(signing_key),
                 tool_name=tool_name,
-                target_path=str(target_path) if target_path else None,
+                target_path=str(primary_target_path) if primary_target_path else None,
                 expected_owner_id="local_owner",
                 expected_client_id=verified_client_id,
                 oauth_token_jti=verified_jti,
@@ -1621,7 +1814,11 @@ class MCPGatewayServer:
                     arguments=tool_args,
                 )
                 return False, msg, {}
-            return True, "", {"grant_id": arg_grant_id, "used_count": grant_rec.get("used_count") if grant_rec else None}
+            return True, "", {
+                "grant_id": arg_grant_id,
+                "used_count": grant_rec.get("used_count") if grant_rec else None,
+                "effective_cwd": resolved_effective_cwd,
+            }
 
         # Local-only in-process invocation (auth_principal is None)
         if not (is_authenticated_owner and server_owner_profile):
@@ -1697,7 +1894,14 @@ class MCPGatewayServer:
         if method.startswith("notifications/"):
             return None
 
-        server_owner_profile = bool(self.policy and getattr(self.policy, "unrestricted_workspace_access", False))
+        server_owner_profile = bool(
+            self.policy
+            and getattr(self.policy, "profile", "") != "read_only"
+            and (
+                getattr(self.policy, "unrestricted_workspace_access", False)
+                or getattr(self.policy, "profile", "") in ("owner_full_control", "full_agent")
+            )
+        )
         from runtime.process_runner import verify_cloud_principal
         _, is_owner_principal, verified_identity = verify_cloud_principal(
             auth_principal,
@@ -1710,12 +1914,10 @@ class MCPGatewayServer:
         if auth_principal is not None:
             caller_id = verified_identity or caller_id
             caller_tier = getattr(auth_principal, "tier", caller_tier)
+        if self.policy and getattr(self.policy, "profile", "") == "read_only":
+            caller_tier = "READ"
         is_authenticated_owner = bool(is_owner_principal and caller_tier in ("WRITE", "EXECUTE", "SYSTEM_ADMIN"))
-        is_owner_full_control = bool(
-            is_authenticated_owner
-            if auth_principal is not None
-            else (server_owner_profile and is_authenticated_owner)
-        )
+        is_owner_full_control = bool(server_owner_profile and is_authenticated_owner)
 
         if method == "initialize":
             from runtime.release_identity import get_release_identity
@@ -1802,6 +2004,110 @@ class MCPGatewayServer:
                 return {"jsonrpc": "2.0", "id": req_id,
                         "error": {"code": -32602, "message": "Tool name must be a string"}}
 
+            _READ_VERIFICATION_TOOLS = {
+                "agent_workspace_list",
+                "agent_read_file",
+                "agent_git_status",
+                "agent_git_diff",
+                "agent_task_status",
+                "agent_task_logs",
+                "agent_task_diff",
+                "agent_task_artifacts",
+                "agent_list_tasks",
+            }
+
+            def _record_read_tool_if_applicable(t_name: str, is_error: bool) -> None:
+                if is_error or t_name not in _READ_VERIFICATION_TOOLS:
+                    return
+                pers = getattr(self, "_oauth_persistence", None)
+                if pers is not None and hasattr(pers, "record_verified_read_tool_call"):
+                    try:
+                        am = str(getattr(auth_principal, "auth_method", "static_bearer") if auth_principal is not None else "local")
+                        pers.record_verified_read_tool_call(
+                            client_id=str(caller_id or "cloud_client_default"),
+                            auth_method=am,
+                            tool_name=t_name,
+                        )
+                    except Exception:
+                        pass
+
+            if tool_name == "agent_request_owner_pairing":
+                pers = getattr(self, "_oauth_persistence", None)
+                sk = str(getattr(self, "_oauth_signing_key", "") or "")
+                am = str(getattr(auth_principal, "auth_method", "") if auth_principal is not None else "")
+                if auth_principal is None or am != "oauth" or pers is None or not sk:
+                    refusal = {
+                        "ok": False,
+                        "error": "unverifiable_client_identity",
+                        "error_code": "UNVERIFIABLE_CLIENT_IDENTITY",
+                        "message": (
+                            "Permission Denied: Authentication: None or shared tunnel bearer credentials do not provide "
+                            "a verifiable per-client identity and cannot request or escalate to owner privileges. "
+                            "Connect with an OAuth 2.1 client identity to pair as owner."
+                        ),
+                    }
+                    self._log_owner_cloud_audit(
+                        tool_name="agent_request_owner_pairing",
+                        tier="SYSTEM_ADMIN",
+                        decision="DENY",
+                        reason="Unverifiable client identity refused for owner pairing",
+                        caller_id=caller_id,
+                        arguments=tool_args if isinstance(tool_args, dict) else {},
+                    )
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {
+                            "content": [{"type": "text", "text": safe_json_result(refusal)}],
+                            "isError": True,
+                        },
+                    }
+                meta = getattr(auth_principal, "metadata", {}) or {}
+                p_tok = meta.get("payload") if isinstance(meta.get("payload"), dict) else {}
+                v_cid = str(getattr(auth_principal, "client_id", "") or p_tok.get("client_id") or "").strip()
+                v_jti = str(p_tok.get("jti") or meta.get("jti") or "").strip()
+                try:
+                    ch_info = pers.create_owner_pairing_challenge(
+                        secret=sk,
+                        client_id=v_cid,
+                        client_name=str(tool_args.get("client_name") or v_cid),
+                        auth_method="oauth",
+                        oauth_token_jti=v_jti,
+                        owner_id="local_owner",
+                        requested_permission_level=str(tool_args.get("requested_permission_level") or "OWNER"),
+                        requested_tiers=tool_args.get("requested_tiers"),
+                        requested_workspaces=tool_args.get("requested_workspaces"),
+                        requested_capabilities=tool_args.get("requested_capabilities"),
+                        requested_ttl_seconds=float(tool_args.get("requested_ttl_seconds", 28800.0)),
+                        allow_destructive=bool(tool_args.get("allow_destructive", False)),
+                        challenge_ttl_seconds=float(tool_args.get("challenge_ttl_seconds", 300.0)),
+                    )
+                    self._log_owner_cloud_audit(
+                        tool_name="agent_request_owner_pairing",
+                        tier="SYSTEM_ADMIN",
+                        decision="PERMIT",
+                        reason=f"Created pairing challenge {ch_info.get('challenge_id')} for OAuth client {v_cid}",
+                        caller_id=v_cid,
+                        arguments=tool_args if isinstance(tool_args, dict) else {},
+                    )
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {
+                            "content": [{"type": "text", "text": safe_json_result({"ok": True, **ch_info})}],
+                            "isError": False,
+                        },
+                    }
+                except Exception as exc:
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "result": {
+                            "content": [{"type": "text", "text": safe_json_result({"ok": False, "error": str(exc)})}],
+                            "isError": True,
+                        },
+                    }
+
             if include_coding_tools:
                 from runtime.coding_tools import ALL_CODING_TOOL_DEFINITIONS, CodingToolHandler
                 if tool_name in ALL_CODING_TOOL_DEFINITIONS:
@@ -1834,9 +2140,11 @@ class MCPGatewayServer:
                             if tool_name == "agent_read_file"
                             else safe_json_result(output)
                         )
+                        is_err_out = bool(isinstance(output, dict) and output.get("error"))
+                        _record_read_tool_if_applicable(tool_name, is_err_out)
                         return {"jsonrpc": "2.0", "id": req_id, "result": {
                             "content": [{"type": "text", "text": wire_text}],
-                            "isError": bool(isinstance(output, dict) and output.get("error")),
+                            "isError": is_err_out,
                         }}
                     except Exception as err:
                         return {"jsonrpc": "2.0", "id": req_id, "result": {
@@ -1845,14 +2153,28 @@ class MCPGatewayServer:
                         }}
 
             if server_owner_profile or is_owner_full_control or tool_name in OWNER_EXEC_AND_DESKTOP_TOOLS:
-                if tool_name in OWNER_CONTROL_AUTONOMOUS_TOOLS and (server_owner_profile or is_owner_full_control):
+                if tool_name in OWNER_CONTROL_AUTONOMOUS_TOOLS and (
+                    bool(self.policy and getattr(self.policy, "unrestricted_workspace_access", False))
+                    or is_owner_full_control
+                ):
+                    # P0-7 Fix: Never allow agent_approve_task on cloud autonomous surface
+                    if tool_name == "agent_approve_task":
+                        return {
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "result": {
+                                "content": [{"type": "text", "text": "Permission Denied (G05): Owner control tool is restricted to authenticated local Owner Web Console"}],
+                                "isError": True,
+                            },
+                        }
+
                     # 1. Require authenticated caller (R2 / V04)
                     if not caller_id or caller_id.casefold() in ("anonymous", "untrusted", "unknown"):
                         return {
                             "jsonrpc": "2.0",
                             "id": req_id,
                             "result": {
-                                "content": [{"type": "text", "text": "Permission Denied (R2): Authenticated caller identity is required"}],
+                                "content": [{"type": "text", "text": "Permission Denied (G05/R2): Authenticated caller identity is required"}],
                                 "isError": True,
                             },
                         }
@@ -1863,7 +2185,18 @@ class MCPGatewayServer:
                             "jsonrpc": "2.0",
                             "id": req_id,
                             "result": {
-                                "content": [{"type": "text", "text": "Permission Denied (R2): Caller is not authorized for emergency stop"}],
+                                "content": [{"type": "text", "text": "Permission Denied (G05/R2): Caller is not authorized for emergency stop"}],
+                                "isError": True,
+                            },
+                        }
+
+                    # P0-7 Fix: On cloud HTTP (auth_principal is not None), non-owner callers in READ tier cannot invoke owner control tools
+                    if auth_principal is not None and not is_authenticated_owner and caller_tier == "READ":
+                        return {
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "result": {
+                                "content": [{"type": "text", "text": "Permission Denied (G05/P0-7): Caller lacks owner or task-control authorization"}],
                                 "isError": True,
                             },
                         }
@@ -1883,7 +2216,8 @@ class MCPGatewayServer:
                                 },
                             }
                         task_owner = getattr(task_rec, "owner_id", None)
-                        if not is_authenticated_owner and task_owner != caller_id:
+                        task_client = getattr(task_rec, "client_id", None)
+                        if not is_authenticated_owner and caller_id not in (task_owner, task_client):
                             return {
                                 "jsonrpc": "2.0",
                                 "id": req_id,
@@ -1893,7 +2227,13 @@ class MCPGatewayServer:
                                 },
                             }
 
-                    out = agent_handler.execute_tool(tool_name, tool_args)
+                    out = agent_handler.execute_tool(
+                        tool_name,
+                        tool_args,
+                        caller_tier=caller_tier,
+                        surface="cloud_autonomous" if auth_principal is not None else "local",
+                        caller_id=caller_id,
+                    )
                     if self.policy and hasattr(self.policy, "audit"):
                         self.policy.audit.log_event(
                             tool_name=tool_name,
@@ -1933,7 +2273,7 @@ class MCPGatewayServer:
 
                 if tool_name == "agent_powershell_execute":
                     cmd = tool_args.get("command", "")
-                    cwd = tool_args.get("cwd") or "."
+                    cwd = tool_args.get("cwd") or grant_meta.get("effective_cwd") or "."
                     timeout_sec = min(max(1, int(tool_args.get("timeout_seconds", 60))), 300)
 
                     from runtime.process_runner import execute_powershell_tree
@@ -2264,7 +2604,7 @@ class MCPGatewayServer:
                                 "exists": True,
                                 "bytes": len(v_bytes),
                                 "sha256": _hl.sha256(v_bytes).hexdigest(),
-                                "file_text": v_bytes.decode("utf-8", errors="replace"),
+                                "file_text": redact_secrets(v_bytes.decode("utf-8", errors="replace")),
                             }
                         else:
                             verify_file_info = {"path": str(vp), "exists": False}
@@ -2470,6 +2810,7 @@ class MCPGatewayServer:
                             surface="cloud_autonomous",
                         )
                 is_err = bool(isinstance(output, dict) and output.get("error"))
+                _record_read_tool_if_applicable(tool_name, is_err)
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,

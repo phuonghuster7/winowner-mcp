@@ -650,11 +650,18 @@ class AgentMCPToolHandler:
                 task.state = TaskState.AUTHORIZATION_PENDING.value
 
             # Trusted Workspace Auto-Grant & Auto-Start (Trusted Full Agent Mode)
+            unprivileged_caller, _ = self._is_caller_unprivileged(caller_tier, args)
+            policy_obj = getattr(self.broker, "policy", None)
+            is_readonly_profile = bool(policy_obj and getattr(policy_obj, "profile", "") == "read_only")
             trusted_entry = (
                 None
-                if args.get("require_manual_approval")
+                if (args.get("require_manual_approval") or unprivileged_caller or is_readonly_profile)
                 else self._match_trusted_workspace(ws_root, allowed_tools, allowed_cmds)
             )
+            if trusted_entry is not None:
+                allowed_callers = trusted_entry.get("allowed_callers")
+                if allowed_callers is not None and eff_client not in allowed_callers and effective_caller not in allowed_callers:
+                    trusted_entry = None
             if trusted_entry is not None and not grant_id and not owner_token:
                 eff_duration = min(duration, float(trusted_entry.get("duration_seconds", 3600.0)))
                 eff_max_calls = min(int(args.get("max_tool_calls", 500)), int(trusted_entry.get("max_tool_calls", 500)))
@@ -1302,7 +1309,19 @@ class AgentMCPToolHandler:
 
         if name == "agent_emergency_stop":
             reason = args.get("reason", "Operator emergency stop triggered via MCP tool")
-            emergency_file = Path(__file__).resolve().parent / "EMERGENCY_STOP"
+            policy_obj = getattr(self.broker, "policy", None)
+            if policy_obj is not None and getattr(policy_obj, "emergency_stop_file", None) is not None:
+                emergency_file = Path(policy_obj.emergency_stop_file)
+            else:
+                env_estop = os.getenv("MCP_EMERGENCY_STOP_FILE") or os.getenv("WINDOWS_MCP_EMERGENCY_STOP_FILE")
+                state_root = os.getenv("MCP_STATE_ROOT")
+                if env_estop:
+                    emergency_file = Path(env_estop)
+                elif state_root:
+                    emergency_file = Path(state_root) / "EMERGENCY_STOP"
+                else:
+                    emergency_file = Path(__file__).resolve().parent / "EMERGENCY_STOP"
+            emergency_file.parent.mkdir(parents=True, exist_ok=True)
             emergency_file.write_text(f"EMERGENCY STOP at {time.time()}: {reason}\n", encoding="utf-8")
 
             all_tasks = self.store.list_tasks(limit=1000)

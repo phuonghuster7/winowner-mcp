@@ -18,7 +18,7 @@ import zipfile
 
 import pytest
 
-PROJECT_ROOT = Path(r"D:\ExampleProjects\Windows-MCP-Agent")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 DIST_DIR = PROJECT_ROOT / "dist"
 
@@ -60,24 +60,33 @@ def test_01_repository_release_and_governance_files_present() -> None:
         PROJECT_ROOT / "CHANGELOG.md",
         PROJECT_ROOT / "LICENSE",
         PROJECT_ROOT / ".github" / "workflows" / "ci-security.yml",
-        PROJECT_ROOT / "docs" / "GITHUB_RELEASE_PLAN.md",
-        PROJECT_ROOT / "docs" / "ACCOUNT_MIGRATION_GUIDE.md",
+        PROJECT_ROOT / "docs" / "PUBLIC_RELEASE_CHECKLIST.md",
+        PROJECT_ROOT / "docs" / "CONNECT_CHATGPT.md",
     ]
     for fpath in required_files:
         assert fpath.exists(), f"Missing required release file: {fpath}"
         assert fpath.stat().st_size > 200, f"Release file unexpectedly small: {fpath}"
 
     changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    for ver in ("v0.1.4", "v0.2.0", "v0.2.1", "v0.3.0", "v1.0.0-rc1"):
+    for ver in ("v1.0.0-rc3", "v1.2.0"):
         assert ver in changelog, f"CHANGELOG.md missing version entry {ver}"
 
 
-def test_02_install_dryrun_on_primary_root_is_non_destructive() -> None:
+def test_02_install_dryrun_on_primary_root_is_non_destructive(tmp_path: Path) -> None:
     """Verify Install-WindowsMcpAgent.ps1 -DryRun passes all checks without mutating credentials."""
-    res = _run_ps1("Install-WindowsMcpAgent.ps1", "-DryRun")
+    dryrun_root = tmp_path / "primary_dryrun"
+    (dryrun_root / "runtime" / "logs").mkdir(parents=True, exist_ok=True)
+    res = _run_ps1(
+        "Install-WindowsMcpAgent.ps1",
+        "-TargetRoot",
+        str(dryrun_root),
+        "-SourceRoot",
+        str(PROJECT_ROOT),
+        "-DryRun",
+    )
     assert res.returncode == 0, f"Install -DryRun failed:\nSTDOUT:{res.stdout}\nSTDERR:{res.stderr}"
 
-    report_path = PROJECT_ROOT / "runtime" / "logs" / "install-report.json"
+    report_path = dryrun_root / "runtime" / "logs" / "install-report.json"
     assert report_path.exists()
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["overall_status"] == "PASS"
@@ -252,10 +261,36 @@ def test_05_repair_update_rollback_and_uninstall_lifecycle() -> None:
         assert rep_report["policy_validation"]["valid"] is True
 
         # 3. Update (normal pass) + Update with -SimulateFailure (automatic rollback verification)
+        rel_out = staging_root / "verified_release_bundle"
+        rel_out.mkdir(parents=True, exist_ok=True)
+        rel_zip = rel_out / "winowner-mcp-v1.2.0.zip"
+        with zipfile.ZipFile(rel_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for rel_f in (
+                "backend/__init__.py",
+                "backend/file_code_ops.py",
+                "backend/exec_jobs.py",
+                "mcp-gateway/__init__.py",
+                "mcp-gateway/policy.py",
+                "mcp-gateway/gateway_server.py",
+                "mcp-gateway/http_server.py",
+                "mcp-gateway/tools_catalog.json",
+                "desktop-agent/__init__.py",
+                "desktop-agent/agent.py",
+                "runtime/__init__.py",
+                "runtime/watchdog.py",
+                "config/policy.example.json",
+            ):
+                zf.write(PROJECT_ROOT / rel_f, arcname=rel_f)
+        rel_sha = _sha256_file(rel_zip)
+
         res_upd = _run_ps1(
             "Update-WindowsMcpAgent.ps1",
             "-TargetRoot",
             str(staging_root),
+            "-ReleaseZipPath",
+            str(rel_zip),
+            "-ExpectedZipSha256",
+            rel_sha,
         )
         assert res_upd.returncode == 0, f"Update failed:\n{res_upd.stdout}\n{res_upd.stderr}"
         upd_report = json.loads(
@@ -268,6 +303,10 @@ def test_05_repair_update_rollback_and_uninstall_lifecycle() -> None:
             "Update-WindowsMcpAgent.ps1",
             "-TargetRoot",
             str(staging_root),
+            "-ReleaseZipPath",
+            str(rel_zip),
+            "-ExpectedZipSha256",
+            rel_sha,
             "-SimulateFailure",
         )
         assert res_rb.returncode == 0, f"Update rollback drill failed:\n{res_rb.stdout}\n{res_rb.stderr}"

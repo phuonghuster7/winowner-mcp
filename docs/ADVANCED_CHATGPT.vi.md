@@ -1,10 +1,10 @@
-# WinOwner MCP 1.1.0 — kết nối ChatGPT nâng cao
+# WinOwner MCP 1.2.0 — kết nối ChatGPT nâng cao
 
 Dành cho người quản lý ChatGPT/OpenAI Platform. Trước tiên phải cài local theo [START_HERE](START_HERE.vi.md).
 
 Các từ chính: **tunnel** là đường kết nối riêng, **OAuth** là bước đăng nhập/cấp quyền tài khoản, **RBAC** là quyền quản trị tổ chức, **DCR** là cơ chế đăng ký OAuth, **loopback** là máy tính hiện tại (127.0.0.1); **ACL** là phân quyền file, **SHA-256** dùng kiểm tra tính toàn vẹn file và **delegation** là quyền chủ máy ủy nhiệm.
 
-Bộ cài local chọn owner_full_control, nhưng không thể tự cấp quyền OAuth hoặc tunnel của tài khoản ChatGPT.
+Bộ cài local mặc định read_only. Chỉ cấp quyền chủ máy (`Scoped` / `Owner`) khi kết nối qua danh tính client **OAuth 2.1** có thể xác minh và chủ máy trực tiếp phê duyệt mã thử thách ghép nối (`XXXX-XXXX`) trong **WinOwner Setup Center** (`http://127.0.0.1:8767/setup`) hoặc `Grant-OwnerAccess.cmd` (không nhập `client_id` thủ công, không dán owner token vào ChatGPT); Windows không thể tự cấp quyền tài khoản ChatGPT.
 
 ## D. Những quyền cần có để thêm ChatGPT
 
@@ -70,13 +70,17 @@ Sau đó, khi đang ở thư mục có tunnel-client.exe:
 
 Tài liệu tham chiếu chính thức: https://developers.openai.com/api/docs/guides/secure-mcp-tunnels
 
+### Authentication None cũng là lựa chọn hợp lệ
+
+Nếu một tunnel riêng đã có cơ chế chứng thực hợp lệ ở WinOwner, có thể chọn **Authentication: None** tại bước tạo plugin trong ChatGPT. Lựa chọn này không thay thế xác minh owner, không cấp capability grant và không làm thay đổi chính sách chặn HTTP 401 với request không có credential. Xem [giải thích dành cho người mới](AUTH_NONE.vi.md).
+
 ## G. Tạo plugin trong ChatGPT
 
 1. Vào **ChatGPT → Plugins → dấu + → Add custom MCP server**. Tên menu có thể khác theo tài khoản.
 2. Ở **Connection**, chọn **Tunnel** rồi chọn tunnel_id đúng với mục F.
-3. Cấu hình xác thực tương thích với server, hoàn thành OAuth theo hướng dẫn trên màn hình. Không dùng tài khoản hay OAuth credential của chủ máy khác.
+3. Chọn **Authentication: None** khi chỉ cần quyền **chỉ đọc (`Read`)** và tunnel đã xác thực với WinOwner ở phía máy. **Lưu ý quan trọng:** `Authentication: None` không gửi danh tính từng client xuống máy Windows nên luôn bị khóa cứng ở mức `Read` và không thể nâng lên quyền chủ máy. Để dùng quyền **WRITE / EXECUTE / DESKTOP (`Scoped` hoặc `Owner`)**, hãy cấu hình tunnel ở chế độ OAuth 2.1 (`Connect-ChatGPT.ps1 -Reconfigure -AuthMode oauth`), đăng nhập OAuth 2.1 khi tạo plugin, rồi phê duyệt mã thử thách ghép nối một lần (`XXXX-XXXX`) trong **WinOwner Setup Center → Review Owner Access** hoặc `Grant-OwnerAccess.cmd`. Tuyệt đối không dán owner token vào màn hình tạo plugin hay khung chat.
 4. Đọc cảnh báo quyền truy cập máy và xác nhận, tạo plugin rồi bật nó trong đoạn chat thử nghiệm.
-5. Thử lệnh đọc an toàn: **“Gọi agent_workspace_list và cho biết các workspace đã được duyệt.”** Chỉ kết luận **CONNECTED** sau khi tool trả kết quả từ đúng tài khoản.
+5. Thử lệnh đọc an toàn: **“Gọi agent_workspace_list và cho biết các workspace đã được duyệt.”** Chỉ kết luận **CHATGPT_CONNECTED** sau khi tool đọc thật trả kết quả thành công.
 
 **WRITE / EXECUTE / DESKTOP** cần capability grant tách biệt và kiểm tra giới hạn. Không bật toàn bộ ổ đĩa làm cách sửa lỗi OAuth.
 
@@ -119,6 +123,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\Bootstrap-Wind
 
 Lệnh Remove chỉ dừng listener được xác minh, gỡ task do WinOwner tạo và **giữ nguyên credential** cho chủ máy xử lý. Gỡ kết nối ChatGPT: xóa plugin hoặc revoke token, tunnel, runtime key trong tài khoản của chính bạn. Để cập nhật phiên bản, sao lưu riêng config và runtime/secrets trước, xem CHANGELOG; không sao chép secret từ người khác.
 
-## K. Trạng thái phát triển v1.1.0
+## K. Trạng thái phát triển v1.2.0
 
-v1.1.0 đang kiểm thử, chưa phát hành stable. Cần nghiệm thu Windows sạch, khởi động lại, OAuth ChatGPT thật và rollback trước khi phát hành.
+v1.2.0 cung cấp hành trình 4 bước (`LOCAL_READY -> CHATGPT_CONNECTED -> OWNER_VERIFIED -> OWNER_CONTROL_READY`), giao diện **WinOwner Setup Center** (`/setup`), `Connect-ChatGPT.cmd` (hỗ trợ `-Reconfigure` có sao lưu và tự động rollback), `Grant-OwnerAccess.cmd` (duyệt mã thử thách ghép nối OAuth 2.1 có xác minh, không cần nhập `client_id` thủ công), `Show-OwnerKey.cmd` (xem tóm tắt trạng thái ghép nối không lộ secret) và `Revoke-OwnerAccess.cmd`. Chỉ coi kết nối hoàn tất khi gọi được tool thật từ ChatGPT; cần nghiệm thu tài khoản thực tế trước khi công bố stable.

@@ -9,22 +9,38 @@
        patterns (`sk-`, `PRIVATE KEY`, unredacted `Bearer` tokens, raw `dpapi_blob`).
     3. Stages the clean release tree with `.gitkeep` placeholders for runtime directories.
     4. Builds:
-         - `D:\ExampleProjects\Windows-MCP-Agent\dist\winowner-mcp-v1.0.0-rc1.zip`
+         - `D:\ExampleProjects\Windows-MCP-Agent\dist\winowner-mcp-v1.2.0.zip`
          - `D:\ExampleProjects\Windows-MCP-Agent\dist\release-manifest.json`
          - `D:\ExampleProjects\Windows-MCP-Agent\dist\SHA256SUMS.txt`
 #>
 [CmdletBinding()]
 param(
-    [string]$ProjectRoot = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }),
-    [string]$OutputDir = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "dist" } else { Join-Path (Get-Location).Path "dist" }),
-    [string]$AttestationPath = $(if ($PSScriptRoot) { Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "runtime\evidence\test_run_attestation.json" } else { Join-Path (Get-Location).Path "runtime\evidence\test_run_attestation.json" }),
-    [string]$Version = "v1.1.0",
+    [string]$ProjectRoot = "",
+    [string]$OutputDir = "",
+    [string]$AttestationPath = "",
+    [string]$Version = "v1.2.0",
     [switch]$RequireAttestation,
     [switch]$DryRun
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+$defaultProjectRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+    $ProjectRoot = $defaultProjectRoot
+}
+if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+    $OutputDir = Join-Path $ProjectRoot "dist"
+}
+if ([string]::IsNullOrWhiteSpace($AttestationPath)) {
+    $AttestationPath = Join-Path $ProjectRoot "runtime\evidence\test_run_attestation.json"
+}
+
+if ($PSHOME -and ($env:PSModulePath -notlike "*$PSHOME\Modules*")) {
+    $env:PSModulePath = "$(Join-Path $PSHOME 'Modules');$env:PSModulePath"
+}
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -43,7 +59,7 @@ $candidateFiles = New-Object System.Collections.Generic.List[string]
 
 # Root files (.md, LICENSE, .gitignore, .gitattributes)
 Get-ChildItem -Path $ProjectRoot -File | Where-Object {
-    $_.Name -in @("LICENSE", ".gitignore", ".gitattributes", "requirements.txt", "requirements-dev.txt", "pytest.ini", "Install-WinOwner.cmd", "Check-WinOwner.cmd", "Uninstall-WinOwner.cmd", "go.ps1") -or $_.Extension -eq ".md"
+    $_.Name -in @("LICENSE", ".gitignore", ".gitattributes", "requirements.txt", "requirements-dev.txt", "pytest.ini", "Install-WinOwner.cmd", "Check-WinOwner.cmd", "Uninstall-WinOwner.cmd", "Connect-ChatGPT.cmd", "Disconnect-ChatGPT.cmd", "Grant-OwnerAccess.cmd", "Show-OwnerKey.cmd", "Revoke-OwnerAccess.cmd", "Open-SetupCenter.cmd", "go.ps1") -or $_.Extension -eq ".md"
 } | ForEach-Object {
     $candidateFiles.Add($_.FullName.Substring($ProjectRoot.Length).TrimStart('\'))
 }
@@ -64,7 +80,10 @@ $moduleSpecs = @(
     @{ Dir = "config";        Exts = @(".json", ".yaml"); ExampleOnly = $true },
     @{ Dir = "scripts";       Exts = @(".ps1", ".py") },
     @{ Dir = "docs";          Exts = @(".md") },
-    @{ Dir = "tests";         Exts = @(".py") }
+    # Reviewed PNG exports only; no arbitrary screenshots or legacy SVGs.
+    @{ Dir = "docs\assets";   Exts = @(".png"); ApprovedNames = @("guide-01-en.png", "guide-01-vi.png", "guide-02-en.png", "guide-02-vi.png", "guide-03-en.png", "guide-03-vi.png", "guide-04-en.png", "guide-04-vi.png") },
+    @{ Dir = "tests";         Exts = @(".py") },
+    @{ Dir = "tests\fixtures"; Exts = @(".py") }
 )
 
 foreach ($spec in $moduleSpecs) {
@@ -73,6 +92,8 @@ foreach ($spec in $moduleSpecs) {
         Get-ChildItem -Path $dirPath -File | Where-Object {
             $extMatch = $_.Extension -in $spec.Exts
             if (-not $extMatch) { return $false }
+            if ($spec.ContainsKey("ApprovedNames") -and $_.Name -notin $spec.ApprovedNames) { return $false }
+            if ($spec.ContainsKey("ApprovedNames") -and ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Documentation asset must not be a reparse point: $($_.Name)" }
             if ($spec.ContainsKey("ExampleOnly") -and $spec.ExampleOnly) {
                 return ($_.Name -like "*.example.json" -or $_.Name -like "*.example.yaml")
             }
@@ -230,13 +251,29 @@ if (-not $DryRun) {
             $ZipPath, [System.IO.Compression.ZipArchiveMode]::Create
         )
         try {
+            $archiveEntryNames = New-Object 'System.Collections.Generic.List[string]'
+            # Windows hosted runners may use an 8.3 TEMP alias (RUNNER~1),
+            # while Get-ChildItem's FullName uses a longer normalized path.
+            # Canonicalize the base before calculating relative ZIP names.
+            $canonicalStageRoot = (Get-Item -LiteralPath $packageStageDir).FullName.TrimEnd([IO.Path]::DirectorySeparatorChar)
+            $canonicalPrefix = $canonicalStageRoot + [IO.Path]::DirectorySeparatorChar
             Get-ChildItem -LiteralPath $packageStageDir -File -Recurse -Force |
                 Sort-Object FullName | ForEach-Object {
-                    $name = $_.FullName.Substring($packageStageDir.Length).TrimStart('\', '/').Replace('\', '/')
+                    if (-not $_.FullName.StartsWith($canonicalPrefix,[StringComparison]::OrdinalIgnoreCase)) {
+                        throw "Unexpected release staging path: $($_.Name)"
+                    }
+                    $name = $_.FullName.Substring($canonicalPrefix.Length).Replace([IO.Path]::DirectorySeparatorChar, '/')
+                    if ([string]::IsNullOrWhiteSpace($name) -or $name.StartsWith('/')) {
+                        throw "Unexpected release ZIP entry name: $name"
+                    }
+                    $archiveEntryNames.Add($name)
                     [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
                         $archive, $_.FullName, $name, [System.IO.Compression.CompressionLevel]::Optimal
                     ) | Out-Null
                 }
+            if (-not $archiveEntryNames.Contains('Install-WinOwner.cmd')) {
+                throw 'Release ZIP lacks root Install-WinOwner.cmd (bad staging path)'
+            }
         } finally {
             $archive.Dispose()
         }

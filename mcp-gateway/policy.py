@@ -815,8 +815,10 @@ class SecurityPolicy:
         state_root = os.getenv("MCP_STATE_ROOT")
         default_rt = Path(state_root) if state_root else (PROJECT_ROOT / "runtime")
         desk_cfg = self.config.get("desktop_policy", {})
+        env_estop = os.getenv("MCP_EMERGENCY_STOP_FILE") or os.getenv("WINDOWS_MCP_EMERGENCY_STOP_FILE")
         raw_estop = (
             emergency_stop_file
+            or env_estop
             or (None if state_root else desk_cfg.get("emergency_stop_file"))
             or (default_rt / "EMERGENCY_STOP")
         )
@@ -862,6 +864,58 @@ class SecurityPolicy:
     @property
     def session_manager(self) -> SessionManager:
         return self.sessions
+
+    def switch_profile(self, target_profile: str, *, reason: str = "owner_approved_profile_switch") -> str:
+        """Atomically switch active policy profile while preserving audit, sessions, roots, and E-Stop state."""
+        allowed_profiles = {
+            "read_only",
+            "developer_p2",
+            "desktop_p3",
+            "full_agent",
+            "owner_full_control",
+        }
+        clean = str(target_profile or "").strip()
+        if clean not in allowed_profiles:
+            raise ValueError(f"Unknown or invalid security profile: {target_profile!r}")
+        profiles_cfg = self.config.get("profiles", {}) if isinstance(self.config, dict) else {}
+        profile_cfg = profiles_cfg.get(clean, {}) if isinstance(profiles_cfg, dict) else {}
+        default_tiers_map = {
+            "read_only": {PermissionTier.READ},
+            "developer_p2": {PermissionTier.READ, PermissionTier.WRITE, PermissionTier.EXECUTE},
+            "desktop_p3": {PermissionTier.READ, PermissionTier.DESKTOP},
+            "full_agent": {PermissionTier.READ, PermissionTier.WRITE, PermissionTier.EXECUTE, PermissionTier.DESKTOP},
+            "owner_full_control": {
+                PermissionTier.READ,
+                PermissionTier.WRITE,
+                PermissionTier.EXECUTE,
+                PermissionTier.DESKTOP,
+                PermissionTier.SYSTEM_ADMIN,
+            },
+        }
+        old_profile = self.profile
+        self.profile = clean
+        self.strict_v021_read_tools_only = bool(
+            profile_cfg.get("strict_v021_read_tools_only", clean == "read_only")
+        )
+        self.unrestricted_workspace_access = bool(
+            profile_cfg.get("unrestricted_workspace_access", clean == "owner_full_control")
+        )
+        if isinstance(profile_cfg, dict) and "enabled_tiers" in profile_cfg:
+            self.enabled_tiers = {PermissionTier(t) for t in profile_cfg["enabled_tiers"]}
+        else:
+            self.enabled_tiers = set(default_tiers_map[clean])
+        if hasattr(self, "audit") and self.audit is not None:
+            try:
+                self.audit.log_event(
+                    tool_name="policy_switch_profile",
+                    tier="SYSTEM_ADMIN",
+                    decision="PERMIT",
+                    reason=f"{reason}: {old_profile} -> {clean}",
+                    arguments={"old_profile": old_profile, "new_profile": clean},
+                )
+            except Exception:
+                pass
+        return self.profile
 
     def _enter_invocation(self) -> None:
         depth = getattr(self._tls, "depth", 0)

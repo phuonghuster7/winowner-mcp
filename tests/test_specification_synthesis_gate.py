@@ -31,6 +31,7 @@ from tests.fixtures.shipment_fixture import (
     BenchmarkShipmentPricingAdapter,
     SHIPMENT_PRICING_SOURCE,
     TEST_SHIPMENT_PRICING_SOURCE,
+    get_codex_like_eval_workspace,
 )
 
 
@@ -53,7 +54,7 @@ BENCHMARK_OBJECTIVE = (
 
 
 def test_extract_objective_requirements_benchmark():
-    ws_bench = str(Path(__file__).resolve().parent.parent / "benchmarks" / "codex_like_eval")
+    ws_bench = str(get_codex_like_eval_workspace(Path(__file__).resolve().parent.parent))
     reqs = extract_objective_requirements(BENCHMARK_OBJECTIVE, ws_bench)
     assert "shipment_pricing.py" in reqs["required_files_to_create"]
     assert "test_shipment_pricing.py" in reqs["required_files_to_create"]
@@ -77,7 +78,7 @@ def test_extract_objective_requirements_defect_repair():
 
 def test_deterministic_synthesize_feature():
     adapter = BenchmarkShipmentPricingAdapter()
-    ws_bench = str(Path(__file__).resolve().parent.parent / "benchmarks" / "codex_like_eval")
+    ws_bench = str(get_codex_like_eval_workspace(Path(__file__).resolve().parent.parent))
     reqs = extract_objective_requirements(BENCHMARK_OBJECTIVE, ws_bench)
     synthesized = adapter._synthesize_feature_code_deterministic(BENCHMARK_OBJECTIVE, ws_bench, reqs)
     assert synthesized is not None
@@ -103,7 +104,7 @@ def test_deterministic_synthesize_feature():
 
 
 def test_autonomous_shipment_pricing_e2e_benchmark():
-    bench_orig = Path(__file__).resolve().parent.parent / "benchmarks" / "codex_like_eval"
+    bench_orig = get_codex_like_eval_workspace(Path(__file__).resolve().parent.parent)
     td = tempfile.mkdtemp()
     try:
         ws = Path(td) / "ws"
@@ -160,7 +161,7 @@ def test_autonomous_shipment_pricing_e2e_benchmark():
 
 
 def test_unsupported_objective_fail_closed():
-    bench_orig = Path(__file__).resolve().parent.parent / "benchmarks" / "codex_like_eval"
+    bench_orig = get_codex_like_eval_workspace(Path(__file__).resolve().parent.parent)
     td = tempfile.mkdtemp()
     try:
         ws = Path(td) / "ws"
@@ -205,7 +206,7 @@ def test_unsupported_objective_fail_closed():
 
 
 def test_deliverable_verification_failures():
-    bench_orig = Path(__file__).resolve().parent.parent / "benchmarks" / "codex_like_eval"
+    bench_orig = get_codex_like_eval_workspace(Path(__file__).resolve().parent.parent)
     td = tempfile.mkdtemp()
     try:
         ws = Path(td) / "ws"

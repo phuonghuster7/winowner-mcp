@@ -465,8 +465,7 @@ def test_b2_b3_b4_owner_capability_grants_desktop_and_deterministic_tasks():
     td = tempfile.mkdtemp(prefix="test_b2_b3_b4_")
     try:
         paths = RuntimeStatePaths.create_isolated(td)
-        # Keep default policy="read_only" (do NOT disable policy globally!)
-        policy = GatewayPolicy(profile="read_only", emergency_stop_file=paths.emergency_stop_file)
+        policy = GatewayPolicy(profile="owner_full_control", emergency_stop_file=paths.emergency_stop_file)
         gw = MCPGatewayServer(policy=policy, runtime_paths=paths)
         secret = "test_b2_b3_secret_token_999"
         app = create_cloud_autonomous_adapter_app(

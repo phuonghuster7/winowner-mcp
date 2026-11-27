@@ -13,7 +13,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$TargetRoot = $(if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { (Get-Location).Path }),
+    [string]$TargetRoot = "",
     [switch]$PurgeBackups,
     [switch]$PurgeSecrets,
     [switch]$DryRun,
@@ -28,8 +28,12 @@ if ((-not $DryRun) -and (-not $ConfirmUninstall)) {
     exit 1
 }
 
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
+$PrimaryRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+if ([string]::IsNullOrWhiteSpace($TargetRoot)) {
+    $TargetRoot = $PrimaryRoot
+}
 $TargetRoot = [System.IO.Path]::GetFullPath($TargetRoot)
-$PrimaryRoot = if ($PSScriptRoot) { (Resolve-Path (Join-Path $PSScriptRoot "..")).Path } else { $TargetRoot }
 $IsPrimaryRoot = ($TargetRoot.TrimEnd('\').ToLowerInvariant() -eq $PrimaryRoot.TrimEnd('\').ToLowerInvariant())
 
 # Safety guard: Never allow destructive live uninstall on primary production root during automated runs unless explicitly intended

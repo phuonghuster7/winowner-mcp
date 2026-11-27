@@ -13,10 +13,12 @@ The port check measures **local listening only**. A working ChatGPT connector al
 
 ## Connection issues
 
-- **429 on SSE probe:** Check the local tunnel-client, restart backoff and any request quota; retry with normal operational procedures, not with unsafe anonymous fallback.
-- **Tunnel unseen:** Verify the exact running tunnel-client profile, watchdog task and OS network connectivity.
-- **Owner false / unauthorized:** Inspect registered client identity, OAuth scope, delegation and expiry. Do not copy another user's tokens.
-- **Outside workspace rejected:** Review the workspace policy. Global owner filesystem is optional and must not be granted to non-owners.
+- **ChatGPT shows `Not Verified` in Setup Center (`LOCAL_READY`):** `/health` and tunnel `/readyz` alone never verify ChatGPT connectivity. Run a harmless read-only prompt in ChatGPT (e.g. `agent_system_status` or `agent_workspace_list`) and click **Verify Connection** in WinOwner Setup Center (`http://127.0.0.1:8767/setup`).
+- **`UNVERIFIABLE_CLIENT_IDENTITY` when requesting owner pairing:** `Authentication: None` over a shared tunnel does not provide a verifiable per-client identity and is strictly capped at `Read`. Reconfigure the tunnel with OAuth 2.1 enabled (`Connect-ChatGPT.ps1 -Reconfigure -AuthMode oauth`), connect ChatGPT with OAuth 2.1, and approve the one-time pairing challenge (`XXXX-XXXX`) in WinOwner Setup Center → **Review Owner Access** or `Grant-OwnerAccess.cmd`. Never paste raw owner tokens into ChatGPT.
+- **429 on SSE probe:** Check the local `tunnel-client`, restart backoff and any request quota; retry with normal operational procedures, not with unsafe anonymous fallback.
+- **Tunnel unseen or reconfiguration failure:** Run `Check-WinOwner.cmd` or use **Reconfigure Tunnel** in WinOwner Setup Center (`Connect-ChatGPT.ps1 -Reconfigure` validates the new configuration before stopping the live tunnel and automatically rolls back on failure).
+- **Owner false / unauthorized:** Check **WinOwner Setup Center** (`Permissions` and `Owner Identity` rows) or `scripts/manage_owner_delegation.py status --json` to inspect active client-bound delegation, grant TTL/expiry, revocation status, and server profile (`read_only` vs `owner_full_control`).
+- **Outside workspace or Git worktree rejected:** Review the approved workspace list and capability grant scope. Linked Git worktrees must have their common Git directory inside an approved workspace boundary and must not contain symlinks, NTFS junctions, hooks, filters, external drivers, or config includes.
 
 ## File, test and CI issues
 

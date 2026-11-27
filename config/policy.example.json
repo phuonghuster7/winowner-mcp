@@ -81,16 +81,13 @@
     "AUTO"
   ],
   "allowed_write_roots": [
-    ".",
-    "benchmarks/codex_like_eval"
+    "."
   ],
   "allowed_git_repos": [
-    ".",
-    "benchmarks/codex_like_eval"
+    "."
   ],
   "allowed_exec_roots": [
-    ".",
-    "benchmarks/codex_like_eval"
+    "."
   ],
   "sensitive_paths": {
     "blocked_path_parts": [
